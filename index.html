@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <meta name="color-scheme" content="light dark">
+  <title>流枢 FlowPivot · 交互演示</title>
+  <link rel="stylesheet" href="app.css?v=07">
+  <script src="app.js?v=07" defer></script>
+</head>
+<body>
+  <div id="icons" hidden aria-hidden="true"></div>
+  <div class="shell">
+    <aside class="side">
+      <a href="#home" class="brand" aria-label="流枢 首页">
+        <span class="mark"><svg width="27" height="27" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M5 8h9l7 8h6M5 16h22M5 24h9l7-8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="m23 12 4 4-4 4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span><strong>流枢</strong></span>
+      </a>
+      <nav id="nav" aria-label="工作台"></nav>
+      <section class="side-bottom traffic" id="traffic" data-status="offline" aria-label="连接状态与流量">
+        <div class="traffic-head">
+          <div class="traffic-state" role="status"><i class="dot" aria-hidden="true"></i><strong id="traffic-state">未连接</strong></div>
+          <span class="traffic-demo">模拟</span>
+        </div>
+        <table class="traffic-table" aria-label="实时网速与本次打开累计流量">
+          <thead><tr><td></td><th scope="col">↓ 下载</th><th scope="col">↑ 上传</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">网速</th><td id="traffic-download">0 KB/s</td><td id="traffic-upload">0 KB/s</td></tr>
+            <tr><th scope="row">流量</th><td id="traffic-down-total">0 B</td><td id="traffic-up-total">0 B</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </aside>
+    <div class="work">
+      <main id="page" aria-label="页面内容"></main>
+    </div>
+  </div>
+  <dialog id="import-dialog" aria-labelledby="dialog-title"><div id="import-content"></div></dialog>
+  <dialog id="remove-dialog" aria-labelledby="remove-title">
+    <div class="dialog-body"><h2 id="remove-title">移除订阅？</h2><p id="remove-detail"></p>
+      <form method="dialog" class="dialog-foot"><button class="button" value="cancel" autofocus>取消</button><button class="button danger" value="remove">移除</button></form>
+    </div>
+  </dialog>
+  <div id="source-menu" role="menu" aria-label="订阅操作" hidden></div>
+  <dialog id="edit-dialog" aria-labelledby="edit-title">
+    <div class="dialog-body"><h2 id="edit-title">编辑订阅</h2>
+      <form id="edit-source" class="edit-form">
+        <label for="edit-name">订阅名称</label><input id="edit-name" class="field" required maxlength="64" autofocus>
+        <div class="dialog-foot"><button class="button" type="button" data-act="cancel-edit">取消</button><button class="button primary" type="submit">保存</button></div>
+      </form>
+    </div>
+  </dialog>
+  <dialog id="core-dialog" aria-labelledby="core-title">
+    <div class="dialog-body"><h2 id="core-title">更换内核版本</h2><p id="core-description"></p>
+      <form id="core-form" class="edit-form">
+        <label for="core-version">选择版本</label><select class="field" id="core-version"></select>
+        <div class="dialog-foot"><button class="button" type="button" data-act="cancel-core">取消</button><button class="button primary" type="submit">更换</button></div>
+      </form>
+    </div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
