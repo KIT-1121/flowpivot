@@ -4,7 +4,7 @@ FlowPivot 是一个多内核代理客户端项目。**当前版本是离线界�
 
 ## 体验
 
-从 [Releases](https://github.com/KIT-1121/flowpivot/releases) 下载 `flowpivot-v0.1.0-preview.1-web.zip`，完整解压，用 Chrome 或 Edge 打开 `index.html`。从源码目录打开 `index.html` 也可以。HTML、JS、CSS 需要放在同一目录。
+下载或克隆本仓库源码，用 Chrome 或 Edge 打开 `index.html`。如果下载的是 ZIP，请先完整解压。HTML、JS、CSS 需要放在同一目录。
 
 - **订阅**：体验样本导入和本地文件格式识别；可整卡选择，支持右键更新样本、编辑名称和移除。
 - **节点**：整行选择，不重绘页面；可模拟测延迟，按订阅顺序、延迟或名称排序。
@@ -18,4 +18,4 @@ FlowPivot 是一个多内核代理客户端项目。**当前版本是离线界�
 
 ## 发布范围
 
-Web 预览 ZIP 不区分 32/64 位，不是 Windows 原生免安装版。Windows 安装版和原生免安装版、Android APK、macOS、Linux 安装包均未发布；以之后正式接入真实代理、并为各平台独立构建验证后的 Release 为准。
+此 Web 预览不区分 32/64 位，不是 Windows 原生免安装版。Windows 安装版和原生免安装版、Android APK、macOS、Linux 安装包均未发布；以之后正式接入真实代理、并为各平台独立构建验证后的 Release 为准。
