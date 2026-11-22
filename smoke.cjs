@@ -14,7 +14,7 @@ const browserPath=process.env.FLOWPIVOT_BROWSER;
     page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
     page.on('request',r=>{if(/^https?:/.test(r.url()))network.push(r.url());});
     const button=name=>page.getByRole('button',{name,exact:true});
-    const link=name=>page.getByRole('link',{name,exact:true});
+    const link=name=>page.locator('#nav').getByRole('button',{name,exact:true});
     const text=s=>page.getByText(s,{exact:true});
     const shown=s=>text(s).first().waitFor({state:'visible'});
     const inspectMenu=button('检测');
