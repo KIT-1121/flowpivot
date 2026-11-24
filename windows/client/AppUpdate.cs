@@ -5,7 +5,7 @@ using System.Net;
 using System.Text.RegularExpressions;
 
 internal static class AppUpdate {
-    internal const string Version="0.2.0-alpha.8";
+    internal const string Version="0.2.0-alpha.19";
     private const string Repo="KIT-1121/flowpivot";
     internal sealed class Candidate {
         internal readonly string Version, Setup, Portable;

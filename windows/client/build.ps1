@@ -28,8 +28,8 @@ $zip=Join-Path $Output ($prefix+'-portable.zip')
 foreach($p in @($Stage,($Stage+'.core-stage.exe'),$setup,$zip)){if(Test-Path -LiteralPath $p){throw "Refusing to overwrite $p"}}
 $Stage=(New-Item -ItemType Directory -Path $Stage).FullName
 $web=(New-Item -ItemType Directory -Path (Join-Path $Stage 'web')).FullName
-foreach($name in @('index.html','client.js','client.css')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot "web\$name") -Destination $web}
-foreach($name in @('app.css','visuals.js')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\..\$name") -Destination $web}
+foreach($name in @('index.html','client.js','client.css','strings.js')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot "web\$name") -Destination $web}
+foreach($name in @('app.css','visuals.js','brand.svg')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot "..\..\$name") -Destination $web}
 foreach($name in @('Microsoft.Web.WebView2.Core.dll','Microsoft.Web.WebView2.WinForms.dll')){Copy-Item -LiteralPath (Join-Path $WebViewSdk "lib\net462\$name") -Destination $Stage}
 Copy-Item -LiteralPath (Join-Path $WebViewSdk 'runtimes\win-x64\native\WebView2Loader.dll') -Destination $Stage
 foreach($name in @('LICENSE.txt','NOTICE.txt')){Copy-Item -LiteralPath (Join-Path $WebViewSdk $name) -Destination (Join-Path $Stage ('WebView2-'+$name))}
@@ -39,6 +39,7 @@ foreach($name in @('README.md','THIRD-PARTY-CORES.md')){Copy-Item -LiteralPath (
 $files=(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | Where-Object Name -NotIn @('LoopbackTest.cs','BundledCoreStager.cs')).FullName
 $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $appIcon=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'assets\FlowPivot.ico')).Path
+Copy-Item -LiteralPath $appIcon -Destination (Join-Path $Stage "FlowPivot-$version.ico")
 $stager=$Stage+'.core-stage.exe'
 $references=@('/reference:System.Web.Extensions.dll','/reference:System.Web.dll','/reference:System.Security.dll','/reference:System.IO.Compression.dll','/reference:System.IO.Compression.FileSystem.dll','/reference:System.Windows.Forms.dll','/reference:System.Drawing.dll',"/reference:$Stage\Microsoft.Web.WebView2.Core.dll","/reference:$Stage\Microsoft.Web.WebView2.WinForms.dll","/reference:$Stage\YamlDotNet.dll")
 try {

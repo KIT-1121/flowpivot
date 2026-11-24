@@ -20,4 +20,14 @@ FlowPivot 是一个多内核代理客户端项目。Windows x64 功能版位于 
 
 ## 发布范围
 
-Windows x64 功能版有本地安装包与解压即用包，尚未发布新版 GitHub Release。Windows 32 位、Android、macOS 和 Linux 仍未出包。
+### Windows x64 · 0.2.0-alpha.19
+
+本机代理默认固定在 `127.0.0.1:7897`。重新启动、重新连接和切换节点不会改变端口。停止代理后，可在「设置 → 本机代理端口」自定义；端口被占用时会提示，不会自动改用随机端口。
+
+Git 使用 HTTPS 远程地址时，可在仓库目录配置一次。运行 Git 命令时需启动流枢，若自定义了端口请相应替换。
+
+```powershell
+git config http.proxy http://127.0.0.1:7897
+```
+
+Windows x64 安装包与免安装 ZIP 为预览版；公开分发状态见 [GitHub Releases](https://github.com/KIT-1121/flowpivot/releases)。本版本不包含 Android、Windows 32 位、macOS 或 Linux 安装包。

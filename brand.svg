@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="FlowPivot">
+  <defs>
+    <linearGradient id="tile" x2="0.94" y2="1">
+      <stop stop-color="#111a3b"/><stop offset=".56" stop-color="#202f6e"/><stop offset="1" stop-color="#3e46a1"/>
+    </linearGradient>
+    <radialGradient id="light" cx=".79" cy=".88" r=".74">
+      <stop stop-color="#5a7dff" stop-opacity=".74"/><stop offset="1" stop-color="#5a7dff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1=".18" y1=".81" x2=".84" y2=".13">
+      <stop stop-color="#83a9ff"/><stop offset=".51" stop-color="#f2f5ff"/><stop offset="1" stop-color="#a4f5ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#tile)"/>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#light)"/>
+  <rect x="2.6" y="2.6" width="58.8" height="58.8" rx="15.4" fill="none" stroke="#c9dbff" stroke-opacity=".30" stroke-width="1.2"/>
+  <path fill="none" stroke="url(#ribbon)" stroke-width="6.2" stroke-linecap="round" stroke-linejoin="round" d="M15 39h7c4 0 6.5-2 9-5.4L39 22c1.7-2.3 3.5-3.3 6-3.3h4M15 25h7c4 0 6.5 2 9 5.4L39 42c1.7 2.3 3.5 3.3 6 3.3h4"/>
+  <circle cx="49" cy="18.7" r="3.65" fill="#c3fbff"/><circle cx="49" cy="45.3" r="3.65" fill="#b0c8ff"/>
+</svg>

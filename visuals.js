@@ -23,18 +23,45 @@ const icons = {
 };
 document.querySelector('#icons').innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${Object.entries(icons).map(([name, paths]) => `<symbol id="icon-${name}" viewBox="0 0 24 24">${paths}</symbol>`).join('')}</svg>`;
 const icon = (name, cl = '') => `<svg class="icon ${cl}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#icon-${name}"></use></svg>`;
-function routeDiagram(control=''){return `<figure class="route-diagram">
-  <svg aria-hidden="true" viewBox="0 0 540 296" fill="none" preserveAspectRatio="xMidYMid meet">
-    <defs><pattern id="route-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" class="diagram-grid"/></pattern></defs>
-    <rect x="0" y="0" width="540" height="296" fill="url(#route-grid)"/>
-    <path d="M24 44v-20h20m452 0h20v20M24 252v20h20m452 0h20v-20" class="diagram-corners"/>
-    <path d="M73 150h110l43-43h72l40 43h129M73 150h110l43 43h72l40-43h129M73 150h394" class="diagram-traces"/>
-    <path d="M73 150h394" class="diagram-link"/>
-    <circle class="diagram-dot" cx="184" cy="150" r="3"/><circle class="diagram-dot" cx="338" cy="150" r="3"/>
-    <circle class="diagram-dot" cx="226" cy="107" r="3"/><circle class="diagram-dot" cx="298" cy="193" r="3"/>
-    <g class="diagram-block"><rect x="54" y="131" width="38" height="38" rx="7"/><path d="M64 142h18v12H64zm4 16h10m-5-4v4"/></g>
-    <g class="diagram-block main"><rect x="235" y="123" width="68" height="54" rx="9"/><path d="M252 139h10l12 10h12m-34 0h34m-34 10h10l12-10m7-5 5 5-5 5"/></g>
-    <g class="diagram-block"><rect x="448" y="131" width="38" height="38" rx="7"/><circle cx="467" cy="150" r="9"/><path d="M458 150h18m-9-9a15 15 0 0 1 0 18m0-18a15 15 0 0 0 0 18"/></g>
-    <text x="73" y="217">本机</text><text x="269" y="217">代理内核</text><text x="467" y="217">出口</text>
-  </svg>${control}
-</figure>`;}
+function routeDiagram(control=''){
+  const inbound='M104 139h58q12 0 22-10l20-20h29';
+  const outbound='M306 169h30l20-20q10-10 22-10h58';
+  return `<figure class="route-diagram" aria-label="代理链路：本机、内核、出口">
+    <svg aria-hidden="true" viewBox="0 0 540 282" fill="none">
+      <defs>
+        <pattern id="route-grid" width="15" height="15" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r=".85" fill="currentColor"/></pattern>
+        <radialGradient id="route-fade"><stop stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient>
+        <mask id="route-mask"><rect width="540" height="282" fill="url(#route-fade)"/></mask>
+        <radialGradient id="route-aura"><stop stop-color="var(--orbit-ice)" stop-opacity=".62"/><stop offset=".52" stop-color="var(--orbit-main)" stop-opacity=".20"/><stop offset="1" stop-color="var(--orbit-main)" stop-opacity="0"/></radialGradient>
+        <linearGradient id="route-beam"><stop stop-color="var(--orbit-main)" stop-opacity="0"/><stop offset=".53" stop-color="var(--orbit-main)"/><stop offset=".8" stop-color="var(--orbit-ice)"/><stop offset="1" stop-color="var(--orbit-main)"/></linearGradient>
+      </defs>
+      <rect class="orbit-grid" width="540" height="282" fill="url(#route-grid)" mask="url(#route-mask)"/>
+      <path class="orbit-reticle" d="M30 66V43q0-10 10-10h28m404 0h28q10 0 10 10v23m0 150v23q0 10-10 10h-28m-404 0H40q-10 0-10-10v-23"/>
+      <ellipse class="orbit-aura" cx="270" cy="140" rx="219" ry="135" fill="url(#route-aura)"/>
+      <path class="orbit-rail" d="${inbound}M104 139h58q12 0 22 10l20 20h29${outbound}M306 109h30l20 20q10 10 22 10h58"/>
+      <path class="orbit-flow inbound" pathLength="100" d="${inbound}"/>
+      <path class="orbit-flow outbound" pathLength="100" d="${outbound}"/>
+      <g class="orbit-center">
+        <circle class="orbit-disc" cx="270" cy="139" r="68"/>
+        <circle class="orbit-dial" cx="270" cy="139" r="89"/>
+        <circle class="orbit-ticks" cx="270" cy="139" r="77"/>
+        <circle class="orbit-arc" cx="270" cy="139" r="77"/>
+        <circle class="orbit-arc reverse" cx="270" cy="139" r="63"/>
+        <circle class="orbit-wave" cx="270" cy="139" r="86"/>
+        <circle class="orbit-edge" cx="270" cy="139" r="52"/>
+        <image class="orbit-brand" href="brand.svg" x="234" y="103" width="72" height="72"/>
+      </g>
+      <g class="orbit-node local" transform="translate(78 139)">
+        <rect x="-27" y="-27" width="54" height="54" rx="15"/>
+        <path d="M-12-8h24v14h-24zM-6 12h12M0 6v6"/>
+        <circle cx="21" cy="-21" r="3.5"/>
+      </g>
+      <g class="orbit-node exit" transform="translate(462 139)">
+        <rect x="-27" y="-27" width="54" height="54" rx="15"/>
+        <circle cx="0" cy="0" r="12"/><ellipse cx="0" cy="0" rx="6" ry="12"/><path d="M-12 0h24"/>
+        <circle cx="21" cy="-21" r="3.5"/>
+      </g>
+      <text x="78" y="195">本机</text><text x="270" y="252">代理内核</text><text x="462" y="195">出口</text>
+    </svg>${control}
+  </figure>`;
+}

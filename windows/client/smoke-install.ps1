@@ -34,9 +34,9 @@ try {
     if (!$link) { throw 'Start Menu shortcut missing.' }
     $shell = New-Object -ComObject WScript.Shell
     if ($shell.CreateShortcut($link.FullName).TargetPath -ne $app) { throw 'Shortcut target mismatch.' }
-    foreach ($name in 'index.html','client.js','client.css','app.css','visuals.js') {
+    foreach ($name in 'index.html','client.js','client.css','strings.js','app.css','visuals.js','brand.svg') {
         $actual = (Get-FileHash -LiteralPath (Join-Path $dir "web/$name")).Hash
-        $expected = (Get-FileHash -LiteralPath (Join-Path $(if($name -in 'app.css','visuals.js'){$source}else{Join-Path $PSScriptRoot 'web'}) $name)).Hash
+        $expected = (Get-FileHash -LiteralPath (Join-Path $(if($name -in 'app.css','visuals.js','brand.svg'){$source}else{Join-Path $PSScriptRoot 'web'}) $name)).Hash
         if ($actual -ne $expected) { throw "Installed file mismatch: $name" }
     }
     'PASS: installation, Start Menu shortcut target, installed UI file integrity, uninstall registration.'

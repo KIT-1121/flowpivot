@@ -37,11 +37,20 @@ internal sealed class MihomoSession : IDisposable
     [DllImport("kernel32.dll",SetLastError=true)] private static extern bool AssignProcessToJobObject(IntPtr job,IntPtr process);
     [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
     [DllImport("kernel32.dll",SetLastError=true)] private static extern bool SetHandleInformation(IntPtr handle,uint mask,uint flags);
-    private static int ReservePort(out TcpListener listener) {
-        listener=new TcpListener(IPAddress.Loopback,0);listener.Start();
+    private static int ReservePort(out TcpListener listener,int port=0) {
+        listener=new TcpListener(IPAddress.Loopback,port);
+        try{listener.Start();}
+        catch(SocketException e){
+            listener.Stop();
+            if(port==0)throw;
+            if(e.SocketErrorCode==SocketError.AddressAlreadyInUse)
+                throw new InvalidOperationException("本机代理端口 "+port+" 已被占用。请关闭占用程序，或在设置中更换端口。",e);
+            throw new InvalidOperationException(PortUnavailable(port),e);
+        }
         if(!SetHandleInformation(listener.Server.Handle,1,0)){listener.Stop();throw new InvalidOperationException("无法隔离本地端口句柄。");}
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
+    private static string PortUnavailable(int port){return "本机代理端口 "+port+" 无法监听。请检查端口是否被占用或保留，或在设置中更换端口。";}
     private static string NewSecret() {var bytes=new byte[32];using(var rng=RandomNumberGenerator.Create())rng.GetBytes(bytes);return BitConverter.ToString(bytes).Replace("-","");}
     internal static string Inspect(string executable,CoreAsset asset) {
         if (!File.Exists(executable)) throw new InvalidOperationException("内置 "+asset.Id+" 内核文件缺失。请重新安装或完整解压 FlowPivot。");
@@ -70,10 +79,10 @@ internal sealed class MihomoSession : IDisposable
             running.BeginOutputReadLine();running.BeginErrorReadLine();return running;
         }catch{try{if(!running.HasExited)running.Kill();}finally{running.Dispose();}throw;}
     }
-    private static bool AcceptsSocks(int port) {
+    private static bool AcceptsSocks(int port,byte auth=2) {
         using(var client=new TcpClient(AddressFamily.InterNetwork))try {
             var task=client.ConnectAsync(IPAddress.Loopback,port);if(!task.Wait(250))return false;
-            using(var stream=client.GetStream()){stream.ReadTimeout=250;var hello=new byte[]{5,1,2};stream.Write(hello,0,hello.Length);return stream.ReadByte()==5&&stream.ReadByte()==2;}
+            using(var stream=client.GetStream()){stream.ReadTimeout=250;var hello=new byte[]{5,1,auth};stream.Write(hello,0,hello.Length);return stream.ReadByte()==5&&stream.ReadByte()==auth;}
         }catch(IOException){return false;}catch(AggregateException){return false;}
     }
     internal static bool IsPinned(string path){
@@ -81,12 +90,17 @@ internal sealed class MihomoSession : IDisposable
         using(var file=File.OpenRead(path))using(var sha=SHA256.Create())return BitConverter.ToString(sha.ComputeHash(file)).Replace("-","")=="04F8D7FC2B314771E1ECBF15951D59F0E1CB7914503C88CFB6972FF6A824E314";
     }
     private static bool TunUp(){return NetworkInterface.GetAllNetworkInterfaces().Any(n=>n.Name==TunName&&n.OperationalStatus==OperationalStatus.Up&&n.GetIPProperties().UnicastAddresses.Any(a=>a.Address.ToString()=="198.18.0.1"));}
-    internal MihomoSession(string executable,string root,ParsedSource source,string selected,string engine="Mihomo",string enginePath=null,bool tun=false) {
+    private const string Selector="FLOWPIVOT-SELECT";
+    private string configBase, selectedNode;
+    private string[] groupNodes;
+    internal bool CanSelect {get;private set;}
+    internal MihomoSession(string executable,string root,ParsedSource source,string selected,string engine="Mihomo",string enginePath=null,bool tun=false,int localPort=0,IEnumerable<DomainRoute> domainRoutes=null) {
         Version=Inspect(executable,CoreAsset.Pick("Mihomo"));
         var node=source.Nodes.SingleOrDefault(n=>n.Id==selected);
         if(node==null)throw new InvalidOperationException("请选择有效节点。");
         TcpListener a,b;
-        Port=ReservePort(out a);
+        CanSelect=node.Native==null;
+        Port=ReservePort(out a,localPort);
         try {api=ReservePort(out b);} catch {a.Stop();throw;}
         folder=Path.Combine(root,"runtime-"+Guid.NewGuid().ToString("N"));
         secret=NewSecret();
@@ -118,8 +132,10 @@ internal sealed class MihomoSession : IDisposable
                 template=template.Replace("tun: {enable: false}","tun: {enable: true, device: "+TunName+", inet4-address: [198.18.0.1/30], stack: mixed, auto-route: true, auto-detect-interface: true, strict-route: true, dns-hijack: [any:53, tcp://any:53]}\n"+
                     "dns: {enable: true, enhanced-mode: fake-ip, fake-ip-range: 198.18.0.1/16, default-nameserver: [1.1.1.1], nameserver: [https://1.1.1.1/dns-query], proxy-server-nameserver: [https://1.1.1.1/dns-query]}");
             }
-            template+=Subscription.ProxiesYaml(nodes)+"rules:\n  - DOMAIN,localhost,DIRECT\n  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve\n  - IP-CIDR6,::1/128,DIRECT,no-resolve\n  - MATCH,"+selected+"\n";
-            File.WriteAllText(config,template,new UTF8Encoding(false));
+            configBase=template+Subscription.ProxiesYaml(nodes);
+            selectedNode=selected;
+            if(CanSelect)groupNodes=source.Nodes.Select(n=>n.Id).ToArray();
+            File.WriteAllText(config,Config(domainRoutes),new UTF8Encoding(false));
             a.Stop();b.Stop();
             tunRequested=tun;
             process=Launch(executable,"-d \""+folder+"\" -f \""+config+"\"");
@@ -129,6 +145,7 @@ internal sealed class MihomoSession : IDisposable
                 Thread.Sleep(120);
             }
             if(!ready)throw new InvalidOperationException("Mihomo 未能启动。请检查订阅是否兼容、核心文件是否正确。");
+            if(localPort!=0&&!AcceptsSocks(Port,0))throw new InvalidOperationException(PortUnavailable(Port));
             if(tun){
                 for(int i=0;i<40 && Alive && !TunUp();i++)Thread.Sleep(150);
                 if(!Alive||!TunUp())throw new InvalidOperationException("TUN 网卡未能就绪，已停止。系统代理模式仍可用。");
@@ -136,6 +153,20 @@ internal sealed class MihomoSession : IDisposable
             File.Delete(config);
         } catch {Dispose();throw;}
         finally {a.Stop();b.Stop();}
+    }
+    private string Config(IEnumerable<DomainRoute> domainRoutes) {
+        string groups=CanSelect?"proxy-groups:\n  - name: "+Selector+"\n    type: select\n    proxies: ["+string.Join(", ",new[]{selectedNode}.Concat(groupNodes.Where(id=>id!=selectedNode)))+"]\n":"";
+        return configBase+groups+TargetRouting.Yaml(domainRoutes,CanSelect?Selector:selectedNode);
+    }
+    internal void ApplyRoutes(IEnumerable<DomainRoute> domainRoutes) {
+        var request=Controller("/configs",5000);request.Method="PUT";request.ContentType="application/json";
+        var payload=Encoding.UTF8.GetBytes(LocalData.Json.Serialize(new{payload=Config(domainRoutes)}));request.ContentLength=payload.Length;
+        try{
+            using(var stream=request.GetRequestStream())stream.Write(payload,0,payload.Length);
+            using(request.GetResponse()){}
+        }catch(WebException e){if(e.Response!=null)e.Response.Dispose();throw;}
+        if(CanSelect&&LocalData.Text(Get("/proxies/"+Selector,2000),"now")!=selectedNode)
+            throw new InvalidOperationException("核心未保留当前节点。");
     }
     internal IDictionary<string,object> Get(string path,int timeout=3000) {
         var request=Controller(path,timeout);
@@ -145,8 +176,31 @@ internal sealed class MihomoSession : IDisposable
             return LocalData.Parse(Encoding.UTF8.GetString(body.ToArray()));
         }
     }
+    internal void Select(string id){
+        if(!CanSelect)throw new InvalidOperationException("当前核心不支持热切换。");
+        var path="/proxies/"+Selector;
+        var request=Controller(path,2000);request.Method="PUT";request.ContentType="application/json";
+        var payload=Encoding.UTF8.GetBytes(LocalData.Json.Serialize(new{name=id}));request.ContentLength=payload.Length;
+        using(var stream=request.GetRequestStream())stream.Write(payload,0,payload.Length);
+        using(request.GetResponse()){}
+        if(LocalData.Text(Get(path,2000),"now")!=id)throw new InvalidOperationException("核心未确认切换。");
+        selectedNode=id;
+    }
     internal long Delay(string id,Uri target) {
         return LocalData.Number(Get("/proxies/"+Uri.EscapeDataString(id)+"/delay?timeout=4200&url="+Uri.EscapeDataString(target.AbsoluteUri),5500),"delay");
+    }
+    internal void CloseConnection(string id) {
+        Guid valid;
+        if(!Guid.TryParseExact(id,"D",out valid))throw new InvalidOperationException("无效的连接编号。");
+        if(!LocalData.Rows(Get("/connections"),"connections").Any(c=>LocalData.Text(c,"id")==id))return;
+        var request=Controller("/connections/"+valid.ToString("D"),2500);request.Method="DELETE";
+        try{using(request.GetResponse()){}}
+        catch(WebException e){
+            using(var response=e.Response as HttpWebResponse){
+                if(response==null||response.StatusCode!=HttpStatusCode.NotFound)
+                    throw new InvalidOperationException("暂时无法断开该连接。");
+            }
+        }
     }
     private HttpWebRequest Controller(string path,int timeout){
         var request=(HttpWebRequest)WebRequest.Create("http://127.0.0.1:"+api+path);

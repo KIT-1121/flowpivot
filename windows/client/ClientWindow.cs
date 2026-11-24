@@ -9,13 +9,13 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-internal sealed class ClientWindow : Form {
+internal sealed partial class ClientWindow : Form {
     private const string Host="flowpivot-client.example";
     private const string Home="https://"+Host+"/index.html";
     private readonly string root,report;
     private readonly WebView2 view=new WebView2();
     private ClientService service;
-    private bool busy,closing,checkingUpdate,closeToTray,exitRequested;
+    private bool busy,closing,checkingUpdate,closeToTray=true,exitRequested;
     private NotifyIcon tray;
     private ContextMenuStrip trayMenu;
     private AppUpdate.Candidate offeredUpdate;
@@ -37,9 +37,10 @@ internal sealed class ClientWindow : Form {
     private ClientWindow(string test) {
         report=test;
         root=test==null?Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FlowPivot"):test+".profile";
-        Text="流枢 FlowPivot";StartPosition=FormStartPosition.CenterScreen;MinimumSize=new Size(430,550);ClientSize=new Size(1150,760);
+        Text=CaptionName;StartPosition=FormStartPosition.CenterScreen;MinimumSize=new Size(430,550);ClientSize=new Size(1150,760);
         Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         view.Dock=DockStyle.Fill;Controls.Add(view);
+        AddCaption();
         Shown+=async (o,e)=>await Boot();
         FormClosing+=OnClosing;
     }
@@ -75,7 +76,7 @@ internal sealed class ClientWindow : Form {
                             document.querySelector('[data-route=sources]').click();
                             if(document.querySelector('h1').textContent!=='订阅' || !document.querySelector('[data-act=import-file]')) return false;
                             document.querySelector('[data-route=settings]').click();
-                            if(document.querySelectorAll('.core-row [data-bundled=true]').length!==4||document.querySelector('.core-panel button')||!document.querySelector('[data-act=app-check]')||document.querySelectorAll('[data-act=theme]').length!==3) return false;
+                            if(document.querySelectorAll('.core-row [data-bundled=true]').length!==4||document.querySelector('.core-panel button')||!document.querySelector('[data-act=app-check]')||document.querySelectorAll('#theme option').length!==6) return false;
                             const select=document.querySelector('#preferred'), label=select.labels[0];
                             if(select.getBoundingClientRect().width>172||label.closest('.row-main').getBoundingClientRect().width<105) return false;
                             document.querySelector('#checks-toggle').click();
@@ -91,8 +92,10 @@ internal sealed class ClientWindow : Form {
                             return document.querySelector('#metric-total').textContent==='0';
                         })()";
                         if(await core.ExecuteScriptAsync(uiScript)!="true")throw new InvalidOperationException("生产 UI 自检失败。");
+                        await TestCaption(core);
+                        await TestLogs(core);
                         await TestCloseBehavior(core);
-                        File.WriteAllText(report,"PASS: production WebView2, native bridge, settings and diagnostics, saved close behavior, hide to tray, restore and explicit exit.");
+                        File.WriteAllText(report,"PASS: production WebView2, native bridge, caption themes and minimize/restore without retained focus, light sidebar, Chinese and English captions and disclaimers, log viewer, settings and diagnostics, close behavior and tray restore.");
                         Close(); // Hide once more, then invoke the tray's real exit command.
                         trayMenu.Items[1].PerformClick();return;
                     }
@@ -102,22 +105,25 @@ internal sealed class ClientWindow : Form {
         }catch(Exception e){
             exitCode=1;busy=false;
             string message=e is WebView2RuntimeNotFoundException?"请先安装 Microsoft Edge WebView2 Runtime。":e is InvalidOperationException?e.Message:"流枢无法启动。请检查系统组件及本地配置读写权限。";
-            if(report!=null)File.WriteAllText(report,"FAIL: "+e.GetType().Name);else MessageBox.Show(this,message,Text,MessageBoxButtons.OK,MessageBoxIcon.Error);
+            if(report!=null)File.WriteAllText(report,"FAIL: "+e.GetType().Name+": "+message);else MessageBox.Show(this,message,Text,MessageBoxButtons.OK,MessageBoxIcon.Error);
             ExitApplication();
         }
     }
     private async Task TestCloseBehavior(CoreWebView2 core){
-        const string setTray=@"(() => {
+        if(!closeToTray)throw new InvalidOperationException("Tray is not the default.");
+        const string setBehavior=@"value => {
             document.querySelector('[data-route=settings]').click();
             const select=document.querySelector('#close-behavior');
-            if(!select || select.value!=='exit') return false;
-            select.value='tray';select.dispatchEvent(new Event('change',{bubbles:true}));return true;
-        })()";
-        if(await core.ExecuteScriptAsync(setTray)!="true")throw new InvalidOperationException("Tray setting missing.");
-        for(int i=0;i<40&&!closeToTray;i++)await Task.Delay(100);
-        if(!closeToTray)throw new InvalidOperationException("Tray setting not applied.");
-        using(var saved=new ClientService(root,false)){
-            if(!saved.CloseToTray)throw new InvalidOperationException("Tray setting not saved.");
+            if(!select || select.disabled) return false;
+            select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));return true;
+        }";
+        if(await core.ExecuteScriptAsync("document.querySelector('[data-route=settings]').click();document.querySelector('#close-behavior').value")!="\"tray\"")throw new InvalidOperationException("Tray default not shown.");
+        foreach(var value in new[]{"exit","tray"}){
+            if(await core.ExecuteScriptAsync("("+setBehavior+")('"+value+"')")!="true")throw new InvalidOperationException("Close setting missing.");
+            for(int i=0;i<40&&(busy||(closeToTray!=(value=="tray")));i++)await Task.Delay(100);
+            using(var saved=new ClientService(root,false)){
+                if(saved.CloseToTray!=(value=="tray"))throw new InvalidOperationException("Close setting not saved.");
+            }
         }
         Close();
         if(IsDisposed||Visible||tray==null||!tray.Visible)throw new InvalidOperationException("Window did not hide to tray.");
@@ -134,9 +140,9 @@ internal sealed class ClientWindow : Form {
     private void HideToTray(){
         if(tray==null){
             trayMenu=new ContextMenuStrip();
-            trayMenu.Items.Add("打开流枢",null,(o,e)=>RestoreWindow());
-            trayMenu.Items.Add("退出",null,(o,e)=>ExitApplication());
-            tray=new NotifyIcon{Icon=Icon,Text="流枢 FlowPivot",ContextMenuStrip=trayMenu};
+            trayMenu.Items.Add(englishCaption?"Open FlowPivot":"打开流枢",null,(o,e)=>RestoreWindow());
+            trayMenu.Items.Add(englishCaption?"Quit":"退出",null,(o,e)=>ExitApplication());
+            tray=new NotifyIcon{Icon=Icon,Text=CaptionName,ContextMenuStrip=trayMenu};
             tray.MouseDoubleClick+=(o,e)=>{if(e.Button==MouseButtons.Left)RestoreWindow();};
         }
         tray.Visible=true;Hide();
@@ -155,6 +161,15 @@ internal sealed class ClientWindow : Form {
         try{
             var message=LocalData.Parse(e.WebMessageAsJson);id=(int)LocalData.Number(message,"id");if(id<1)return;
             var action=LocalData.Text(message,"action");var args=LocalData.Obj(message,"args")??new Dictionary<string,object>();
+            if(action=="language"){
+                string value=LocalData.Text(args,"value");
+                if(value!="zh-CN"&&value!="en")return;
+                SetLanguage(value);Reply(id,true,null);return;
+            }
+            if(action=="theme") {
+                string value=LocalData.Text(args,"value");
+                ApplyCaptionTheme(value);Reply(id,true,null);return;
+            }
             if(action=="app-check") {
                 if(checkingUpdate){Reply(id,false,"正在检查更新。");return;}
                 checkingUpdate=true;
@@ -180,11 +195,39 @@ internal sealed class ClientWindow : Form {
             }
             busy=true;
             try{
-                if(action=="import-file") {
-                    using(var dialog=new OpenFileDialog{Title="导入订阅文件",Filter="订阅文件|*.yaml;*.yml;*.json;*.txt|所有文件|*.*",CheckFileExists=true}){
+                if(action=="logs-choose") {
+                    using(var dialog=new FolderBrowserDialog{Description="选择流枢日志存放目录",SelectedPath=service.LogDirectory,ShowNewFolderButton=true}){
                         if(dialog.ShowDialog(this)!=DialogResult.OK){Reply(id,true,null);return;}
+                        string chosen=dialog.SelectedPath;
+                        Reply(id,true,await Task.Run(()=>service.ChangeLogDirectory(chosen)));return;
+                    }
+                }
+                if(action=="logs-default") {Reply(id,true,await Task.Run(()=>service.ChangeLogDirectory(null)));return;}
+                if(action=="logs-folder") {
+                    var directory=service.LogDirectory;
+                    if(report==null){
+                        await Task.Run(()=>Directory.CreateDirectory(directory));
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory){UseShellExecute=true});
+                    }
+                    Reply(id,true,null);return;
+                }
+                if(action=="source-export") {
+                    string yaml=(string)await Task.Run(()=>service.Run("source-yaml",args));
+                    using(var dialog=new SaveFileDialog{Title=englishCaption?"Export YAML (contains private node credentials)":"导出 YAML（含节点凭据，请勿公开）",FileName="FlowPivot-nodes.yaml",Filter=englishCaption?"YAML files|*.yaml;*.yml":"YAML 文件|*.yaml;*.yml",DefaultExt="yaml",AddExtension=true,OverwritePrompt=true,RestoreDirectory=true}){
+                        if(dialog.ShowDialog(this)!=DialogResult.OK){Reply(id,true,null);return;}
+                        string path=dialog.FileName;
+                        await Task.Run(()=>File.WriteAllText(path,yaml,new UTF8Encoding(false)));
+                        Reply(id,true,true);return;
+                    }
+                }
+                if(action=="import-file") {
+                    using(var dialog=new OpenFileDialog{Title=englishCaption?"Import subscription file":"导入订阅文件",Filter=englishCaption?"Subscription files|*.yaml;*.yml;*.json;*.txt|All files|*.*":"订阅文件|*.yaml;*.yml;*.json;*.txt|所有文件|*.*",CheckFileExists=true}){
+                        if(dialog.ShowDialog(this)!=DialogResult.OK){Reply(id,true,null);return;}
+                        Post(new{id,progress=new{stage="reading"}});
                         string file=dialog.FileName;
-                        args=await Task.Run<IDictionary<string,object>>(()=>ReadFile(file));action="import";
+                        try{args=await Task.Run<IDictionary<string,object>>(()=>ReadFile(file));}
+                        catch(Exception ex){service.RecordFileImportError(ex);throw;}
+                        action="import";
                     }
                 }
                 if(action=="start"&&LocalData.Text(args,"mode")=="tun"&&MessageBox.Show(this,"实验性 TUN 将改变 Windows 路由与 DNS，可能短时间中断网络。确定继续？",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes){Reply(id,true,null);return;}
@@ -197,6 +240,44 @@ internal sealed class ClientWindow : Form {
         }catch(Exception error){
             if(id>0)Reply(id,false,error is InvalidOperationException?error.Message:"操作未完成。请检查核心、网络或本地文件权限。");
         }
+    }
+    private async Task TestLogs(CoreWebView2 core){
+        await core.ExecuteScriptAsync("document.querySelector('[data-route=settings]').click();document.querySelector('[data-act=logs-view]').click();");
+        for(int i=0;i<30;i++){
+            if(await core.ExecuteScriptAsync("document.querySelector('#logs-dialog').open && document.querySelector('#logs-text').textContent.includes('应用启动')")=="true")break;
+            if(i==29)throw new InvalidOperationException("默认日志未在应用内显示。");
+            await Task.Delay(100);
+        }
+        const string privateMarker="FLOWPIVOT_TEST_REDACTION_MARKER";
+        string chosen=Path.Combine(root,"自定义 日志");
+        await Task.Run(()=>{
+            service.ChangeLogDirectory(chosen);
+            if(service.LogDirectory!=chosen)throw new InvalidOperationException("自定义日志路径未生效。");
+            try{service.Run("import",new Dictionary<string,object>{{"input",privateMarker}});}catch(InvalidOperationException){}
+            service.RecordFileImportError(new IOException(privateMarker));
+            using(var reloaded=new ClientService(root,false)){
+                if(reloaded.LogDirectory!=chosen)throw new InvalidOperationException("自定义路径没有持久化。");
+                string invalid=Path.Combine(root,"not-a-directory");
+                File.WriteAllText(invalid,"");
+                try{reloaded.ChangeLogDirectory(invalid);throw new Exception("Unexpected path acceptance.");}catch(InvalidOperationException){}
+                if(reloaded.LogDirectory!=chosen)throw new InvalidOperationException("无效目录不应覆盖现有目录。");
+            }
+            string file=File.ReadAllText(Directory.GetFiles(chosen,"FlowPivot-*.log")[0]);
+            if(!file.Contains("读取订阅文件失败")||file.Contains(privateMarker))throw new InvalidOperationException("日志脱敏测试失败。");
+        });
+        await core.ExecuteScriptAsync("document.querySelector('[data-act=logs-refresh]').click();");
+        for(int i=0;i<30;i++){
+            if(await core.ExecuteScriptAsync("!document.querySelector('[data-act=logs-default]').hidden && document.querySelector('#logs-text').textContent.includes('已更换日志目录')")=="true")break;
+            if(i==29)throw new InvalidOperationException("自定义日志未能刷新。");
+            await Task.Delay(100);
+        }
+        await core.ExecuteScriptAsync("document.querySelector('[data-act=logs-default]').click();");
+        for(int i=0;i<30;i++){
+            if(await core.ExecuteScriptAsync("document.querySelector('#logs-text').textContent.includes('已恢复默认日志目录')")=="true")break;
+            if(i==29)throw new InvalidOperationException("未能恢复默认日志目录。");
+            await Task.Delay(100);
+        }
+        await core.ExecuteScriptAsync("document.querySelector('[data-act=logs-close]').click();");
     }
     private static IDictionary<string,object> ReadFile(string path){
         using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){

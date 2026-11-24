@@ -36,6 +36,7 @@ Name: "desktopicon"; Description: "{cm:Desktop}"
 
 [Files]
 Source: "{#Payload}\FlowPivot.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Payload}\FlowPivot-{#Version}.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\*-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Payload}\WebView2-NOTICE.txt"; DestDir: "{app}"; Flags: ignoreversion
@@ -45,13 +46,31 @@ Source: "{#Payload}\cores\*"; DestDir: "{app}\cores"; Flags: ignoreversion recur
 Source: "{#Payload}\web\*"; DestDir: "{app}\web"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\流枢 FlowPivot"; Filename: "{app}\FlowPivot.exe"; WorkingDir: "{app}"; IconFilename: "{app}\FlowPivot.exe"
-Name: "{userdesktop}\流枢 FlowPivot"; Filename: "{app}\FlowPivot.exe"; WorkingDir: "{app}"; IconFilename: "{app}\FlowPivot.exe"; Tasks: desktopicon
+Name: "{group}\流枢 FlowPivot"; Filename: "{app}\FlowPivot.exe"; WorkingDir: "{app}"; IconFilename: "{app}\FlowPivot-{#Version}.ico"
+Name: "{userdesktop}\流枢 FlowPivot"; Filename: "{app}\FlowPivot.exe"; WorkingDir: "{app}"; IconFilename: "{app}\FlowPivot-{#Version}.ico"; Check: ShouldCreateDesktopIcon
 
 [Run]
 Filename: "{app}\FlowPivot.exe"; Description: "{cm:StartClient}"; Flags: nowait postinstall skipifsilent unchecked
 
 [Code]
+function ShouldCreateDesktopIcon: Boolean;
+var LinkPath: String;
+    Shell, Shortcut: Variant;
+begin
+  Result := WizardIsTaskSelected('desktopicon');
+  if Result then Exit;
+  { Refresh the existing shortcut on upgrade even if the create task was not selected. }
+  LinkPath := ExpandConstant('{userdesktop}\流枢 FlowPivot.lnk');
+  if not FileExists(LinkPath) then Exit;
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    Shortcut := Shell.CreateShortcut(LinkPath);
+    Result := CompareText(Shortcut.TargetPath, ExpandConstant('{app}\FlowPivot.exe')) = 0;
+  except
+    Log('Could not verify an existing desktop shortcut.');
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var Existing: String;
     Key: String;

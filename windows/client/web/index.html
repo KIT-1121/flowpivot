@@ -4,11 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; form-action 'none'; base-uri 'none'">
+  <link rel="icon" href="brand.svg" type="image/svg+xml">
   <meta name="color-scheme" content="light dark">
-  <title>流枢 FlowPivot</title>
+  <title>流枢</title>
   <link rel="stylesheet" href="app.css">
   <link rel="stylesheet" href="client.css">
   <script src="visuals.js" defer></script>
+  <script src="strings.js" defer></script>
   <script src="client.js" defer></script>
 </head>
 <body>
@@ -16,7 +18,7 @@
   <div class="shell">
     <aside class="side">
       <button type="button" class="brand" aria-label="流枢 首页">
-        <span class="mark"><svg width="27" height="27" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M5 8h9l7 8h6M5 16h22M5 24h9l7-8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="m23 12 4 4-4 4" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="mark"><img src="brand.svg" width="39" height="39" alt=""></span>
         <span><strong>流枢</strong></span>
       </button>
       <nav id="nav" aria-label="工作台"></nav>
@@ -40,7 +42,44 @@
     </div>
   </div>
   <dialog id="update-dialog" aria-labelledby="update-title"><div class="dialog-body"><h2 id="update-title">发现新版本</h2><p id="update-description"></p><p>将在浏览器中下载新版。安装或替换前请退出流枢。</p><p id="update-error" role="alert" hidden></p><div class="dialog-foot"><button type="button" class="button" data-act="app-later" autofocus>暂不更新</button><button type="button" class="button primary" data-act="app-download">更新</button></div></div></dialog>
+  <dialog id="logs-dialog" aria-labelledby="logs-title"><div class="dialog-body">
+    <div class="dialog-head"><h2 id="logs-title">运行日志</h2><button type="button" class="button" data-act="logs-close" autofocus>关闭日志</button></div>
+    <div class="log-location"><strong>存放目录</strong><span id="logs-path"></span></div>
+    <div class="log-actions"><button type="button" class="button" data-act="logs-refresh">刷新</button><button type="button" class="button" data-act="logs-folder">打开目录</button><button type="button" class="button" data-act="logs-choose">更换目录</button><button type="button" class="button" data-act="logs-default" hidden>恢复默认</button></div>
+    <p id="logs-status" role="status"></p>
+    <pre id="logs-text" tabindex="0" data-verbatim-content aria-label="今日日志内容"></pre>
+  </div></dialog>
   <dialog id="editor" aria-labelledby="editor-title"><form class="dialog-body" id="editor-form"><h2 id="editor-title"></h2><label for="editor-input" id="editor-label"></label><input class="field" id="editor-input" autocomplete="off" required><div class="dialog-foot"><button type="button" class="button" data-act="cancel">取消</button><button type="submit" class="button primary">确定</button></div></form></dialog>
+  <dialog id="config-editor" aria-labelledby="config-title" aria-describedby="config-help">
+    <form class="dialog-body" id="config-form">
+      <h2 id="config-title"></h2><p id="config-help"></p>
+      <textarea class="field" id="config-text" maxlength="1600000" spellcheck="false" autocomplete="off" aria-labelledby="config-title"></textarea>
+      <div id="config-error" role="alert" hidden></div>
+      <div class="dialog-foot"><button type="button" class="button" data-act="config-cancel">取消</button><button type="submit" class="button primary" id="config-save">保存</button></div>
+    </form>
+  </dialog>
+  <dialog id="domain-editor" aria-labelledby="domain-title"><div class="dialog-body domain-body">
+    <div class="dialog-head"><h2 id="domain-title">分流规则</h2><button class="button" type="button" data-act="domain-close">完成</button></div>
+    <p class="domain-help">从上到下匹配，第一条命中的规则生效。仅影响新连接。</p>
+    <p class="domain-empty" id="domain-empty">暂无分流规则</p>
+    <ol id="domain-list"></ol>
+    <form id="domain-form">
+      <label><span>匹配方式</span><select class="field themed-select" id="domain-kind"><option value="keyword">域名关键词</option><option value="regex">域名正则</option><option value="exact">精确域名</option><option value="ip">IP 地址</option></select></label>
+      <label><span>匹配内容</span><input class="field" id="domain-pattern" maxlength="128" placeholder="baidu" required autocomplete="off" spellcheck="false" autofocus aria-describedby="domain-example"></label>
+      <label><span>目标走向</span><select class="field themed-select" id="domain-value"><option value="direct">直连</option><option value="proxy">代理</option></select></label>
+      <p class="domain-help" id="domain-example"><span data-rule-example="keyword">匹配包含该词的域名。完整 IP 会按地址匹配。</span><span data-rule-example="regex" hidden>仅匹配域名，支持基础正则。</span><span data-rule-example="exact" hidden>只匹配此域名，不含子域名。</span><span data-rule-example="ip" hidden>填写 IPv4 或 IPv6，不带端口。</span></p>
+      <p id="domain-error" role="alert" hidden></p>
+      <p id="domain-status" class="domain-help" role="status" hidden></p>
+      <div class="dialog-foot"><button type="button" class="button" id="domain-reset" data-act="domain-reset" hidden>取消编辑</button><button type="submit" class="button primary" id="domain-save">添加规则</button></div>
+    </form>
+  </div></dialog>
+  <dialog id="disclaimer-dialog" aria-labelledby="disclaimer-title"><div class="dialog-body">
+    <h2 id="disclaimer-title">免责声明</h2>
+    <p>流枢是网络代理客户端，不提供代理节点或订阅服务。请仅使用你信任且有权使用的服务，并遵守适用法律、服务条款和网络管理规定。</p>
+    <p>第三方节点可能查看连接元数据和未加密流量。流枢不保证匿名、隐私保护、网络连通或地区解锁；检测结果仅供参考。</p>
+    <p>本软件按现状提供，不保证兼容性、稳定性或适用于特定用途。启用系统代理或 TUN 前，请确认允许更改设备的网络配置。</p>
+    <div class="dialog-foot"><button type="button" class="button" data-act="disclaimer-close" autofocus>完成</button></div>
+  </div></dialog>
   <div id="source-menu" role="menu" aria-label="订阅操作" hidden></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>

@@ -1,0 +1,164 @@
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+
+internal sealed partial class ClientWindow {
+    private Panel caption;
+    private Button minimizeCaption,maximizeCaption,closeCaption;
+    private string captionTheme;
+    private bool englishCaption;
+    private string CaptionName {get{return englishCaption?"FlowPivot":"流枢";}}
+    private void SetLanguage(string language){
+        englishCaption=language=="en";
+        Text=CaptionName;
+        if(caption!=null){
+            caption.AccessibleName=englishCaption?"FlowPivot title bar":"流枢标题栏";
+            closeCaption.AccessibleName=englishCaption?"Close window":"关闭窗口";
+            minimizeCaption.AccessibleName=englishCaption?"Minimize":"最小化";
+            UpdateMaximizeLabel();
+            caption.Invalidate();
+        }
+        if(tray!=null){tray.Text=CaptionName;trayMenu.Items[0].Text=englishCaption?"Open FlowPivot":"打开流枢";trayMenu.Items[1].Text=englishCaption?"Quit":"退出";}
+    }
+    private void UpdateMaximizeLabel(){
+        bool max=WindowState==FormWindowState.Maximized;
+        maximizeCaption.Text=max?"❐":"□";
+        maximizeCaption.AccessibleName=englishCaption?(max?"Restore":"Maximize"):(max?"还原":"最大化");
+    }
+    private static bool SystemCaption { get { return !Application.RenderWithVisualStyles||SystemInformation.HighContrast; } }
+    protected override CreateParams CreateParams {
+        get {
+            var styles=base.CreateParams;
+            // Keep the resizable Win32 frame, system menu and window state styles.
+            if(!SystemCaption)styles.Style&=~0x00C00000; // WS_CAPTION
+            return styles;
+        }
+    }
+    [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam);
+    private void ShowWindowMenu(){SendMessage(Handle,0x0112,new IntPtr(0xF100),new IntPtr(32));} // SC_KEYMENU (Alt+Space)
+    private void ToggleMaximize(){WindowState=WindowState==FormWindowState.Maximized?FormWindowState.Normal:FormWindowState.Maximized;}
+    private int CaptionUnit(int px){return Math.Max(1,(px*DeviceDpi+48)/96);}
+    private void AddCaption(){
+        if(SystemCaption)return;
+        caption=new Panel{Dock=DockStyle.Top,Height=34,AccessibleName="流枢标题栏"};
+        var titleFace=new Font("Microsoft YaHei UI",9f,FontStyle.Bold);
+        var wordmarkFace=new Font("Segoe UI Semibold",9f);
+        caption.Disposed+=(o,e)=>{titleFace.Dispose();wordmarkFace.Dispose();};
+        caption.Paint+=(o,e)=>{
+            int iconSize=CaptionUnit(19), titleLeft=CaptionUnit(39);
+            if(Icon!=null)e.Graphics.DrawIcon(Icon,new Rectangle(CaptionUnit(11),(caption.Height-iconSize)/2,iconSize,iconSize));
+            const TextFormatFlags flags=TextFormatFlags.SingleLine|TextFormatFlags.VerticalCenter|TextFormatFlags.NoPrefix;
+            int available=caption.ClientSize.Width-titleLeft-minimizeCaption.Width-maximizeCaption.Width-closeCaption.Width-CaptionUnit(12);
+            if(available>0)TextRenderer.DrawText(e.Graphics,CaptionName,englishCaption?wordmarkFace:titleFace,
+                new Rectangle(titleLeft,0,available,caption.Height),caption.ForeColor,flags|TextFormatFlags.EndEllipsis);
+        };
+        caption.MouseDown+=(o,e)=>{
+            if(e.Button==MouseButtons.Right){ShowWindowMenu();return;}
+            if(e.Button!=MouseButtons.Left)return;
+            if(e.X<30){ShowWindowMenu();return;}
+            if(e.Clicks>1){ToggleMaximize();return;}
+            ReleaseCapture();
+            var point=caption.PointToScreen(e.Location);
+            SendMessage(Handle,0x00A1,new IntPtr(2),new IntPtr((point.X&0xffff)|((point.Y&0xffff)<<16))); // HTCAPTION (native drag)
+        };
+        closeCaption=AddCaptionButton("关闭窗口","×",()=>Close());
+        maximizeCaption=AddCaptionButton("最大化","□",ToggleMaximize);
+        minimizeCaption=AddCaptionButton("最小化","−",MinimizeWindow);
+        Resize+=(o,e)=>UpdateMaximizeLabel();
+        Controls.Add(caption);
+        caption.SendToBack();
+        ApplyCaptionTheme("glass");
+    }
+    private void MinimizeWindow(){
+        // WinForms restores the active child with the window. Do not leave the
+        // minimize button as that child, but keep it reachable by keyboard.
+        if(minimizeCaption.Focused||ActiveControl==minimizeCaption)ActiveControl=view;
+        WindowState=FormWindowState.Minimized;
+    }
+    private Button AddCaptionButton(string label,string glyph,Action action){
+        var button=new Button{Text=glyph,AccessibleName=label,Dock=DockStyle.Right,Width=44,FlatStyle=FlatStyle.Flat,UseVisualStyleBackColor=false};
+        button.FlatAppearance.BorderSize=0;
+        button.Click+=(o,e)=>action();
+        caption.Controls.Add(button);button.BringToFront();
+        return button;
+    }
+    private void ApplyCaptionTheme(string theme){
+        Color bg, hover;
+        bool dark=theme=="dark"||theme=="ink";
+        switch(theme){
+            case "glass": bg=Color.FromArgb(210,225,245);hover=Color.FromArgb(186,209,240);break;
+            case "light": bg=Color.FromArgb(243,245,245);hover=Color.FromArgb(220,233,231);break;
+            case "dark": bg=Color.FromArgb(17,26,28);hover=Color.FromArgb(41,59,62);break;
+            case "mist": bg=Color.FromArgb(225,232,237);hover=Color.FromArgb(205,219,229);break;
+            case "paper": bg=Color.FromArgb(233,226,215);hover=Color.FromArgb(221,209,192);break;
+            case "ink": bg=Color.FromArgb(23,29,39);hover=Color.FromArgb(43,56,74);break;
+            default: throw new InvalidOperationException("不支持该主题。");
+        }
+        captionTheme=theme;
+        var text=dark?Color.FromArgb(232,236,243):theme=="paper"?Color.FromArgb(59,49,39):Color.FromArgb(21,44,78);
+        if(caption!=null){
+            caption.BackColor=bg;caption.ForeColor=text;
+            foreach(var button in new[]{minimizeCaption,maximizeCaption,closeCaption}){
+                button.BackColor=bg;button.ForeColor=text;
+                button.FlatAppearance.MouseOverBackColor=button==closeCaption?(dark?Color.FromArgb(109,46,54):Color.FromArgb(255,187,191)):hover;
+            }
+        }
+        if(!SystemInformation.HighContrast){BackColor=bg;view.DefaultBackgroundColor=bg;}
+    }
+    private async Task TestCaption(CoreWebView2 core){
+        await core.ExecuteScriptAsync("document.querySelector('[data-route=settings]').click();");
+        foreach(var option in new[]{"en","zh-CN"}){
+            string expected=option=="en"?"FlowPivot":"流枢";
+            await core.ExecuteScriptAsync("(()=>{const s=document.querySelector('#language');s.value='"+option+"';s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            for(int i=0;i<30&&Text!=expected;i++)await Task.Delay(100);
+            if(Text!=expected||CaptionName!=expected||await core.ExecuteScriptAsync("document.title")!=LocalData.Json.Serialize(expected))
+                throw new InvalidOperationException("Single-language caption or page title did not update.");
+            string disclaimer=option=="en"?"Disclaimer":"免责声明";
+            const string disclaimerTest=@"(() => {
+                const trigger=document.querySelector('[data-act=disclaimer-open]');
+                const dialog=document.querySelector('#disclaimer-dialog');
+                trigger.click();
+                const title=dialog.open&&dialog.querySelector('h2').textContent;
+                dialog.querySelector('[data-act=disclaimer-close]').click();
+                return !dialog.open&&document.activeElement===trigger?title:null;
+            })()";
+            if(await core.ExecuteScriptAsync("document.querySelector('[data-act=disclaimer-open]').focus();"+disclaimerTest)!=LocalData.Json.Serialize(disclaimer))
+                throw new InvalidOperationException("Localized disclaimer did not open, close, or restore focus.");
+            if(caption!=null){
+                using(var snapshot=new Bitmap(caption.Width,caption.Height)){
+                    caption.DrawToBitmap(snapshot,new Rectangle(Point.Empty,caption.ClientSize));
+                    snapshot.Save(report+".caption-"+option+".png",System.Drawing.Imaging.ImageFormat.Png);
+                }
+            }
+        }
+        if(caption==null)return; // Use the system controls in high contrast.
+        foreach(var theme in new[]{"light","dark","mist","paper","ink","glass"}){
+            var previous=caption.BackColor;
+            await core.ExecuteScriptAsync("(()=>{const s=document.querySelector('#theme');s.value='"+theme+"';s.dispatchEvent(new Event('change',{bubbles:true}));})()");
+            for(int i=0;i<30&&captionTheme!=theme;i++)await Task.Delay(100);
+            if(captionTheme!=theme||caption.BackColor==previous||view.Top<caption.Bottom)throw new InvalidOperationException("Caption theme or layout did not update.");
+            if(theme=="light"&&await core.ExecuteScriptAsync("getComputedStyle(document.querySelector('.side')).backgroundColor")!="\"rgb(234, 240, 240)\"")
+                throw new InvalidOperationException("Light theme sidebar did not become light.");
+        }
+        using(var snapshot=new Bitmap(caption.Width,caption.Height)){
+            caption.DrawToBitmap(snapshot,new Rectangle(Point.Empty,caption.ClientSize));
+            snapshot.Save(report+".caption.png",System.Drawing.Imaging.ImageFormat.Png);
+        }
+        maximizeCaption.PerformClick();
+        if(WindowState!=FormWindowState.Maximized)throw new InvalidOperationException("Caption did not maximize.");
+        maximizeCaption.PerformClick();
+        if(WindowState!=FormWindowState.Normal)throw new InvalidOperationException("Caption did not restore.");
+        Activate();
+        if(!minimizeCaption.Focus())throw new InvalidOperationException("Could not focus minimize for the restore regression.");
+        minimizeCaption.PerformClick();
+        if(WindowState!=FormWindowState.Minimized)throw new InvalidOperationException("Caption did not minimize.");
+        WindowState=FormWindowState.Normal;
+        await Task.Delay(100);
+        if(minimizeCaption.Focused||ActiveControl==minimizeCaption)
+            throw new InvalidOperationException("Minimize retained the focus outline after restore.");
+    }
+}

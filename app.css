@@ -101,18 +101,55 @@ main { max-width:1320px; margin-inline:auto; padding:clamp(24px,4.5vw,66px) clam
 .power:disabled { background:#304645; color:#a6bfba; border-color:#54706b }
 .hero[data-status=online] .power { background:#213a37; color:#dbf1ea; border-color:#689088 }
 .home-node { color:var(--hero-muted); font-size:13px; min-height:20px }
-.route-diagram { width:100%; max-width:635px; justify-self:end; border-left:1px solid var(--hero-line) }
-.route-diagram svg { width:100%; height:auto }
-.diagram-grid { stroke:#2a4143 }
-.diagram-corners { stroke:#597778; stroke-width:1.25 }
-.diagram-traces { stroke:#506d69; stroke-width:1.5; stroke-linejoin:round }
-.diagram-link { stroke:#87e4c7; stroke-width:1.5; stroke-dasharray:5 7; opacity:.38; transition:opacity .3s }
-.hero[data-status=online] .diagram-link { opacity:1; animation:signal 1.6s linear infinite }
-@keyframes signal { to{stroke-dashoffset:-36} }
-.diagram-dot { fill:#749d93 }
-.diagram-block { fill:#263d3e; stroke:#82a89f; stroke-width:1.35; stroke-linecap:round; stroke-linejoin:round }
-.diagram-block.main { fill:#28534a; stroke:#9ad9c7 }
-.route-diagram text { fill:#b2c9c5; font-family:inherit; font-size:12px; text-anchor:middle; letter-spacing:.02em }
+.brand .mark { width:39px; height:39px; padding:0; border:0; background:none }
+.brand .mark img { display:block; width:100%; height:100%; filter:drop-shadow(0 3px 5px #101a3b30) }
+.route-diagram {
+  --orbit-main:#77a0ff; --orbit-ice:#b4edff; --orbit-panel:#172840; --orbit-top:#19273c; --orbit-bottom:#132e37;
+  position:relative; isolation:isolate; width:auto; max-width:635px; justify-self:stretch; min-width:0; margin:12px 15px 12px 0;
+  border:1px solid var(--hero-line); border-radius:16px; overflow:hidden;
+  background:radial-gradient(ellipse at 56% 47%,color-mix(in srgb,var(--orbit-main) 19%,transparent),transparent 65%),linear-gradient(145deg,var(--orbit-top),var(--orbit-bottom));
+  box-shadow:inset 0 1px 0 #fff2,0 8px 24px #151e3b18;
+}
+.route-diagram > svg { display:block; width:100%; height:auto; color:var(--orbit-main) }
+.route-diagram text { fill:var(--hero-muted); font-size:13px; font-weight:650; text-anchor:middle; letter-spacing:.085em }
+.orbit-grid { opacity:.32 }
+.orbit-reticle,.orbit-rail,.orbit-dial,.orbit-ticks,.orbit-edge { stroke:var(--orbit-main); stroke-width:1 }
+.orbit-reticle { opacity:.38 }
+.orbit-rail { opacity:.42 }
+.orbit-disc { fill:var(--orbit-panel); fill-opacity:.62; stroke:var(--orbit-main); stroke-opacity:.17 }
+.orbit-dial { opacity:.38; stroke-dasharray:1 4 }
+.orbit-ticks { opacity:.32; stroke-dasharray:1 7; stroke-width:2 }
+.orbit-edge { opacity:.46; stroke-width:1.5 }
+.orbit-center > :is(.orbit-arc,.orbit-wave,.orbit-brand) { transform-box:fill-box; transform-origin:center }
+.orbit-arc { opacity:.63; stroke:var(--orbit-main); stroke-width:2.6; stroke-linecap:round; stroke-dasharray:61 181 }
+.orbit-arc.reverse { opacity:.52; stroke:var(--orbit-ice); stroke-width:2; stroke-dasharray:31 153; transform:rotate(-81deg) }
+.orbit-brand { filter:drop-shadow(0 4px 8px #0a123a49) }
+.orbit-aura { opacity:.40; transition:opacity .35s }
+.orbit-wave,.orbit-flow { opacity:0; stroke:var(--orbit-main); pointer-events:none }
+.orbit-flow { stroke:url(#route-beam); stroke-width:3.1; stroke-linecap:round; stroke-dasharray:24 76; stroke-dashoffset:24 }
+.orbit-node { stroke:var(--orbit-main); stroke-width:1.45; stroke-linecap:round; stroke-linejoin:round }
+.orbit-node rect { fill:var(--orbit-panel); fill-opacity:.8; stroke-opacity:.60 }
+.orbit-node circle[r="3.5"] { fill:var(--orbit-main); stroke:var(--orbit-panel); opacity:.53 }
+.hero:is([data-status=starting],[data-status=online]) .orbit-aura { opacity:.96 }
+.hero:is([data-status=starting],[data-status=online]) .orbit-arc { opacity:1; animation:orbit-spin 8s linear infinite }
+.hero:is([data-status=starting],[data-status=online]) .orbit-arc.reverse { animation:orbit-spin 6s linear infinite reverse }
+.hero:is([data-status=starting],[data-status=online]) .orbit-flow { opacity:.96; animation:orbit-packet 1.75s linear infinite }
+.hero:is([data-status=starting],[data-status=online]) .orbit-flow.outbound { animation-delay:-.82s }
+.hero[data-status=starting] .orbit-arc { animation-duration:1.6s }
+.hero[data-status=starting] .orbit-arc.reverse { animation-duration:2.15s }
+.hero[data-status=starting] .orbit-flow { animation-duration:.93s }
+.hero[data-status=starting] .orbit-wave { animation:orbit-wave 1.25s var(--ease) infinite }
+.hero[data-status=online] .orbit-wave { animation:orbit-wave .72s var(--ease) 1 }
+.hero[data-status=online] .orbit-node circle[r="3.5"] { fill:var(--orbit-ice); opacity:1 }
+.hero[data-status=online] .orbit-brand { animation:orbit-lock .52s var(--ease) 1 }
+.power { isolation:isolate; position:relative; overflow:hidden }
+.power::after { content:""; position:absolute; inset:0; pointer-events:none; background:linear-gradient(110deg,transparent 15%,#fff7 50%,transparent 85%); transform:translateX(-110%) }
+.hero[data-status=starting] .power::after { animation:orbit-button 1.04s var(--ease) infinite }
+@keyframes orbit-spin { to { transform:rotate(1turn) } }
+@keyframes orbit-packet { to { stroke-dashoffset:-76 } }
+@keyframes orbit-wave { from { opacity:.86; transform:scale(.64) } to { opacity:0; transform:scale(1.52) } }
+@keyframes orbit-lock { from { transform:scale(.90); opacity:.64 } 54% { transform:scale(1.09) } to { transform:scale(1); opacity:1 } }
+@keyframes orbit-button { 85%,100% { transform:translateX(110%) } }
 .mode-card { display:grid; grid-template-columns:minmax(108px,1fr) auto; align-items:center; gap:7px 13px; padding:15px 19px }
 .mode-label { display:flex; align-items:center; gap:11px }
 .mode-label h2 { font-size:15px }
@@ -246,8 +283,8 @@ dialog::backdrop { background:#1023248a; animation:fade-in .2s ease both }
   .hero h2 { font-size:29px }
   .power { margin-top:2px; min-height:43px; min-width:110px; font-size:15px }
   .power .icon { width:18px; height:18px }
-  .route-diagram { border-left:0; border-top:1px solid var(--hero-line); height:114px }
-  .route-diagram svg { width:100%; height:114px }
+  .route-diagram { margin:0 10px 10px; border-radius:12px }
+  .route-diagram > svg { height:clamp(120px,52vw,204px) }
   .mode-card,.source-card,.row { padding-inline:12px }
   .mode-label { gap:7px }
   .mode-label .square { width:32px; height:32px }
@@ -335,4 +372,9 @@ dialog::backdrop { background:#1023248a; animation:fade-in .2s ease both }
   .node-select { gap:8px }
   .check-table .site-remove { width:25px; min-height:28px }
   .check-site .site-remove .icon { width:14px; height:14px }
+}
+
+@media(prefers-reduced-motion:reduce) {
+  .hero .route-diagram :is(.orbit-arc,.orbit-flow,.orbit-wave,.orbit-brand),.hero .power::after { animation:none!important }
+  .hero:is([data-status=starting],[data-status=online]) .orbit-flow { stroke-dasharray:none; opacity:.85 }
 }
