@@ -38,6 +38,11 @@ internal sealed class SourceRecord
     public string Body { get; set; }
     public string Override { get; set; }
     public SubscriptionQuota Quota { get; set; }
+    public int RefreshHours { get; set; }
+    public long NextRefreshUtcTicks { get; set; }
+    internal int RefreshRevision;
+    internal int NodeRevision;
+    internal bool AutoRefreshFailed;
 }
 internal sealed class SubscriptionQuota {
     public long? Total { get; set; }
@@ -391,6 +396,30 @@ internal static class Subscription
         var root=new YamlMappingNode();root.Add("proxies",new YamlSequenceNode(nodes.Select(x=>(YamlNode)x.Data)));
         var output=new StringWriter(CultureInfo.InvariantCulture);new YamlStream(new YamlDocument(root)).Save(output,false);
         return output.ToString().TrimEnd().TrimEnd('.').TrimEnd() + "\n";
+    }
+    internal static bool SameNodeConfig(ProxyNode a,ProxyNode b) {
+        if(a.Kind!=b.Kind||a.Engine!=b.Engine)return false;
+        if(a.Data==null||b.Data==null)
+            return a.Native!=null&&b.Native!=null&&SameJsonValue(a.Native,b.Native);
+        var name=new YamlScalarNode("name");var left=a.Data.Children;var right=b.Data.Children;
+        return left.Count==right.Count&&left.Where(x=>!x.Key.Equals(name)).All(x=>{
+            YamlNode value;return right.TryGetValue(x.Key,out value)&&x.Value.Equals(value);
+        });
+    }
+    private static bool SameJsonValue(object left,object right){
+        var map=left as IDictionary<string,object>;
+        if(map!=null){
+            var other=right as IDictionary<string,object>;
+            return other!=null&&map.Count==other.Count&&map.All(pair=>{
+                object value;return other.TryGetValue(pair.Key,out value)&&SameJsonValue(pair.Value,value);
+            });
+        }
+        var array=left as object[];
+        if(array!=null){
+            var other=right as object[];
+            return other!=null&&array.Length==other.Length&&array.Zip(other,SameJsonValue).All(equal=>equal);
+        }
+        return object.Equals(left,right);
     }
     internal static string ExportYaml(ParsedSource source) {
         if(source.Nodes.Any(x=>x.Data==null))throw new InvalidOperationException("此订阅是原生 JSON，无法无损转换为 Clash/Mihomo YAML。");

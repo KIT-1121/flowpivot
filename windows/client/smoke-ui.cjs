@@ -11,7 +11,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     const page=await browser.newPage({viewport:{width:1200,height:790}});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.addInitScript(()=>{
-      const state={appVersion:'0.2.0-alpha.19',localProxyPort:7897,online:false,closeToTray:true,delayUrl:'https://www.gstatic.com/generate_204',mode:'local',cores:['Mihomo','Xray','sing-box','V2Fly'].map(id=>({id,version:'v1',available:'v1'})),source:'a',node:'a4',preferred:'Xray',sources:[{id:'a',name:'测试订阅',format:'Mihomo',count:2,refreshable:true,yaml:true,quota:{total:107374182400,used:26843545600,remaining:80530636800}},{id:'b',name:'另一个订阅',format:'Xray',count:1,refreshable:true}],nodes:[{id:'a4',name:'甲',engine:'Mihomo',kind:'http',ready:true,delay:80},{id:'a5',name:'乙',engine:'Mihomo',kind:'socks5',ready:true,delay:30}],traffic:{up:0,down:0,rateUp:0,rateDown:0},connections:{total:0,direct:0,routed:0,rows:[]}};
+      const state={appVersion:'0.2.0-alpha.22',localProxyPort:7897,online:false,closeToTray:true,delayUrl:'https://www.gstatic.com/generate_204',mode:'local',cores:['Mihomo','Xray','sing-box','V2Fly'].map(id=>({id,version:'v1',available:'v1'})),source:'a',node:'a4',preferred:'Xray',sources:[{id:'a',name:'测试订阅',format:'Mihomo',count:2,refreshable:true,yaml:true,quota:{total:107374182400,used:26843545600,remaining:80530636800}},{id:'b',name:'另一个订阅',format:'Xray',count:1,refreshable:true}],nodes:[{id:'a4',name:'甲',engine:'Mihomo',kind:'http',ready:true,delay:80},{id:'a5',name:'乙',engine:'Mihomo',kind:'socks5',ready:true,delay:30}],traffic:{up:0,down:0,rateUp:0,rateDown:0},connections:{total:0,direct:0,routed:0,rows:[]}};
       let reply;window.updateChecks=0;window.openDownloads=[];window.clipboard=[];window.sourceCalls=0;
       window.chrome ||= {};
       window.chrome.webview={addEventListener(k,f){if(k==='message')reply=f;},postMessage({id,action,args}){
@@ -27,7 +27,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
         if(action==='app-check'){
           window.updateChecks++;
           const fail=window.updateCheckFails;
-          setTimeout(()=>reply({data:{id,ok:!fail,body:fail?'连不上 GitHub，暂时无法检查更新。':{version:'0.2.0-alpha.20'}}}),60);
+          setTimeout(()=>reply({data:{id,ok:!fail,body:fail?'连不上 GitHub，暂时无法检查更新。':{version:'0.2.0-alpha.23'}}}),60);
           return;
         }
         if(action==='app-download'){
@@ -76,6 +76,23 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
           return;
         }
         if(action==='close-behavior')state.closeToTray=args.value==='tray';
+        if(action==='refresh-interval'){
+          const source=state.sources.find(s=>s.id===args.id);
+          source.refreshHours=Number(args.value);source.nextRefresh=source.refreshHours?new Date(Date.now()+source.refreshHours*3600000).toISOString():null;
+        }
+        const disconnect=()=>{
+          state.online=false;state.port=0;
+          state.subscriptionDisconnectRevision=(state.subscriptionDisconnectRevision||0)+1;
+        };
+        if(action==='refresh'){
+          state.subscriptionRevision=(state.subscriptionRevision||0)+1;
+          if(state.online&&window.changeCurrentNode)disconnect();
+        }
+        window.simulateAutoRefresh=(changed=false)=>{
+          state.subscriptionRevision=(state.subscriptionRevision||0)+1;
+          state.sources[0].quota.used=53687091200;
+          if(state.online&&changed)disconnect();
+        };
         if(action==='rename')state.sources.find(s=>s.id===args.id).name=args.name;
         window.emptyFixture=()=>{state.sources=[];state.source=state.node=null;state.nodes=[];};
         if(action==='import'||action==='import-file'){
@@ -109,7 +126,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     });
     await page.goto(pathToFileURL(path.join(process.argv[2],'web','index.html')).href);
     await page.waitForSelector('body[data-ready=yes]');
-    assert.equal(await page.locator('html').getAttribute('data-theme'),'glass');
+    assert.equal(await page.locator('html').getAttribute('data-theme'),'paper');
     const go = async k=>{
       if(['reach','ip'].includes(k)&&await page.locator('#checks-toggle').getAttribute('aria-expanded')==='false')await page.locator('#checks-toggle').click();
       await page.locator(`[data-route=${k}]`).click();
@@ -117,7 +134,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     const update=page.getByRole('dialog',{name:'发现新版本'});
     await update.waitFor();
     assert.equal(await page.evaluate(()=>window.updateChecks),1);
-    assert.match(await update.locator('#update-description').textContent(),/0\.2\.0-alpha\.19/);
+    assert.match(await update.locator('#update-description').textContent(),/0\.2\.0-alpha\.22/);
     await update.getByRole('button',{name:'暂不更新'}).click();
     await update.waitFor({state:'hidden'});
     assert.deepEqual(await page.evaluate(()=>window.openDownloads),[]);
@@ -166,7 +183,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await page.getByRole('button',{name:'查看新版'}).click();
     await update.getByRole('button',{name:'更新',exact:true}).click();
     await update.waitFor({state:'hidden'});
-    assert.deepEqual(await page.evaluate(()=>window.openDownloads),['0.2.0-alpha.20']);
+    assert.deepEqual(await page.evaluate(()=>window.openDownloads),['0.2.0-alpha.23']);
     await page.evaluate(()=>{window.updateCheckFails=true;});
     await page.getByRole('button',{name:'检查更新'}).click();
     await page.getByText('连不上 GitHub，暂时无法检查更新。').waitFor();
@@ -175,34 +192,40 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     assert.equal(await page.locator('[data-route=home]').evaluate(el=>getComputedStyle(el).display),'flex');
     assert.equal(await page.locator('[data-route=home] use').getAttribute('href'),'#icon-home');
     assert.equal(await page.locator('.route-diagram > svg').count(),1);
+    for(const selector of ['.page-head','.route-diagram','#traffic','.traffic-table tbody']){
+      assert.equal(await page.locator(selector).evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
+    }
     assert.equal(await page.locator('.brand img').evaluate(e=>e.complete&&e.naturalWidth>0),true);
     assert.equal(await page.locator('.orbit-brand').getAttribute('href'),'brand.svg');
     assert.equal(await page.locator('.orbit-flow').first().evaluate(e=>getComputedStyle(e).animationName),'none');
-    const settled=()=>page.locator('#nav-glass').evaluate(el=>Promise.all(el.getAnimations().map(a=>a.finished.catch(()=>{}))));
-    const aligned=()=>page.evaluate(()=>{
-      const glass=document.querySelector('#nav-glass').getBoundingClientRect();
-      const active=([...document.querySelectorAll('#nav [aria-current=page]')].find(e=>!e.closest('[inert]'))).getBoundingClientRect();
-      return ['left','right','top','bottom'].every(k=>Math.abs(glass[k]-active[k])<1.5);
-    });
-    await settled();assert.equal(await aligned(),true);
-    await page.locator('#nav-glass').evaluate(el=>window.initialGlass=el);
+    const staticNav=async selected=>{
+      const nav=await page.evaluate(()=>{
+        const s=document.querySelector('.side'), active=[...document.querySelectorAll('#nav [aria-current=page]')].filter(e=>!e.closest('[inert]'));
+        const style=getComputedStyle(s), bounds=s.getBoundingClientRect();
+        const current=active[0]&&getComputedStyle(active[0]);
+        return {current:active[0]?.dataset.route||active[0]?.id,count:active.length,glass:document.querySelectorAll('#nav-glass,.nav-glass-layer').length,animations:document.querySelector('#nav').getAnimations({subtree:true}).length,
+          left:bounds.left,top:bounds.top,corner:style.borderRadius,border:style.borderLeftWidth,blur:style.backdropFilter,shadow:style.boxShadow,
+          fill:current?.backgroundColor,background:style.backgroundColor};
+      });
+      assert.equal(nav.current,selected);
+      assert.equal(nav.count,1);
+      assert.equal(nav.glass,0);
+      assert.equal(nav.animations,0);
+      assert.equal(nav.left,0);assert.equal(nav.top,0);
+      assert.equal(nav.corner,'0px');assert.equal(nav.border,'0px');assert.equal(nav.blur,'none');assert.equal(nav.shadow,'none');
+      assert.notEqual(nav.fill,nav.background);
+    };
+    await staticNav('home');
+    const navElement=await page.locator('.nav-stage').elementHandle();
     await page.locator('[data-route=sources]').evaluate(el=>el.click());
-    const motion=await page.evaluate(()=>{
-      const el=window.initialGlass, a=el.getAnimations()[0];if(!a)return null;
-      const duration=a.effect.getTiming().duration;
-      a.pause();a.currentTime=duration*.36;
-      const stretched=el.getBoundingClientRect().height;
-      a.currentTime=duration*.72;
-      const bounce=el.getBoundingClientRect().top;
-      const target=document.querySelector('[data-route=sources]').getBoundingClientRect();
-      const pageMs=document.querySelector('main .enter').getAnimations()[0]?.effect.getTiming().duration;
-      a.play();return {same:el===document.querySelector('#nav-glass'),stretch:stretched>target.height,overshoot:bounce>target.top,duration,pageMs};
-    });
-    assert.deepEqual(motion,{same:true,stretch:true,overshoot:true,duration:175,pageMs:175});
-    await settled();assert.equal(await aligned(),true);
-    await go('ip');await settled();assert.equal(await aligned(),true);
-    await page.locator('#checks-toggle').click();await settled();assert.equal(await aligned(),true);
-    await go('home');await settled();
+    await staticNav('sources');
+    assert.ok(await navElement.evaluate(e=>e===document.querySelector('.nav-stage')));
+    await go('ip');await staticNav('ip');
+    assert.equal(await page.locator('#checks-subnav .sub-link use').count(),2);
+    assert.equal(await page.locator('.subnav-inner').evaluate(el=>getComputedStyle(el).borderLeftWidth),'0px');
+    await page.locator('#checks-toggle').click();await staticNav('checks-toggle');
+    await go('home');await staticNav('home');
+    await go('settings');await page.locator('#theme').selectOption('glass');await go('home');
     await page.mouse.move(500,240);
     await page.waitForFunction(()=>document.querySelector('#pointer-glow').dataset.on==='yes'&&document.querySelector('#pointer-glow').style.getPropertyValue('--glow-x')==='500px');
     assert.equal(await page.locator('#pointer-glow').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
@@ -210,8 +233,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await page.waitForFunction(()=>!document.querySelector('#pointer-glow').dataset.on);
     await page.emulateMedia({reducedMotion:'reduce'});
     await page.waitForFunction(()=>matchMedia('(prefers-reduced-motion: reduce)').matches);
-    await settled();
-    await go('sources');assert.equal(await page.locator('#nav-glass').evaluate(el=>el.getAnimations().filter(a=>a.effect.getTiming().duration>1).length),0); await settled();assert.equal(await aligned(),true);
+    await go('sources');await staticNav('sources');
     await page.mouse.move(500,240);assert.equal(await page.locator('#pointer-glow').isHidden(),true);
     await page.emulateMedia({reducedMotion:'no-preference'});
     await go('sources');const cardFoot=await page.locator('.source-state').first().boundingBox();
@@ -238,7 +260,22 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await page.locator('[data-source=a].source-active').waitFor();
     assert.match(await page.locator('[data-source=a] .source-quota').textContent(),/总流量100(?:\.0)? GB.*已用25(?:\.0)? GB.*剩余75(?:\.0)? GB/s);
     await page.getByText('暂无套餐流量 · 可尝试更新',{exact:true}).waitFor();
+    if(out){
+      if(await page.locator('#checks-toggle').getAttribute('aria-expanded')==='false')await page.locator('#checks-toggle').click();
+      await page.locator('[data-source=a].source-active').waitFor();
+      await page.mouse.move(800,600);
+      await page.locator('#toast').evaluate(e=>e.classList.remove('show','visible'));
+      await page.screenshot({path:path.join(out,'subscriptions.png'),animations:'disabled'});
+    }
     const sourceAction=async action=>{await page.locator('[data-source=a] .source-menu-trigger').click();await page.locator('#source-menu [data-act="'+action+'"]').click();};
+    await sourceAction('refresh-interval');
+    assert.equal(await page.locator('#editor-input').inputValue(),'0');
+    await page.locator('#editor-input').fill('12');
+    await page.locator('#editor-form button[type=submit]').click();
+    await page.getByText('已保存自动更新间隔',{exact:true}).waitFor();
+    await page.getByText(/自动更新：每 12 小时/).waitFor();
+    await page.evaluate(()=>window.simulateAutoRefresh());
+    await page.locator('[data-source=a] .source-quota').getByText('50 GB',{exact:true}).first().waitFor();
     await sourceAction('source-export');
     await page.getByText('YAML 已导出',{exact:true}).waitFor();
     assert.deepEqual(await page.evaluate(()=>window.lastSource),{action:'source-export',id:'a'});
@@ -485,11 +522,28 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
       await page.locator('#theme').selectOption(theme);
       const palette=await page.evaluate(()=>{
         const get=s=>getComputedStyle(document.querySelector(s));
-        return {sidebar:get('.side').backgroundColor,nav:get('#nav-glass').backgroundImage,glow:get('#pointer-glow').display,body:get('body').backgroundImage};
+        return {sidebar:get('.side').backgroundColor,nav:get('.nav-link[aria-current=page]').backgroundImage,glow:get('#pointer-glow').display,body:get('body').backgroundImage};
       });
       assert.equal(palette.sidebar,{
-        light:'rgb(234, 240, 240)',dark:'rgb(16, 25, 27)',mist:'rgb(220, 229, 235)',paper:'rgb(229, 220, 205)',ink:'rgb(27, 36, 49)',glass:'rgba(248, 252, 255, 0.36)'
+        light:'rgb(234, 240, 240)',dark:'rgb(16, 25, 27)',mist:'rgb(220, 229, 235)',paper:'rgb(229, 220, 205)',ink:'rgb(27, 36, 49)',glass:'rgb(229, 233, 240)'
       }[theme]);
+      assert.equal(palette.nav,'none');
+      await staticNav('settings');
+      const contrast=await page.evaluate(()=>{
+        function lum(color){
+          const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);
+          return .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+        }
+        function ratio(a,b){let x=lum(a),y=lum(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);}
+        const side=getComputedStyle(document.querySelector('.side')), selected=getComputedStyle(document.querySelector('.nav-link[aria-current=page]')), inactive=getComputedStyle(document.querySelector('[data-route=home]'));
+        const primary=getComputedStyle(document.documentElement);
+        const mainText=primary.getPropertyValue('--text').trim(), muted=primary.getPropertyValue('--muted').trim(), surface=primary.getPropertyValue('--surface').trim();
+        const normalize=hex=>'rgb('+hex.slice(1).match(/../g).map(c=>parseInt(c,16)).join(', ')+')';
+        const safeHex=v=>/^#[0-9a-f]{6}$/i.test(v);
+        return [ratio(selected.color,selected.backgroundColor),ratio(inactive.color,side.backgroundColor),
+          ...([mainText,muted,surface].every(safeHex)?[ratio(normalize(mainText),normalize(surface)),ratio(normalize(muted),normalize(surface))]:[])];
+      });
+      assert.ok(contrast.every(x=>x>=4.5),theme+' nav contrast '+contrast);
       if(['mist','paper','ink'].includes(theme)){
         assert.equal(palette.nav,'none');assert.equal(palette.glow,'none');assert.equal(palette.body,'none');
       }
@@ -498,7 +552,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
       await dropdown.focus();await dropdown.press('Space');
       await page.locator('#close-behavior:open').waitFor();
       const picker=await dropdown.evaluate(e=>getComputedStyle(e,'::picker(select)').backgroundColor);
-      assert.equal(picker,{glass:'rgb(231, 239, 253)',dark:'rgb(25, 36, 39)',light:'rgb(255, 255, 255)',mist:'rgb(242, 245, 247)',paper:'rgb(247, 242, 232)',ink:'rgb(32, 41, 54)'}[theme]);
+      assert.equal(picker,{glass:'rgb(250, 251, 254)',dark:'rgb(25, 36, 39)',light:'rgb(255, 255, 255)',mist:'rgb(242, 245, 247)',paper:'rgb(247, 242, 232)',ink:'rgb(32, 41, 54)'}[theme]);
       if(out&&theme==='glass')await page.screenshot({path:path.join(out,'dropdown.png'),animations:'disabled'});
       await dropdown.press('Escape');
       await page.locator('#close-behavior:not(:open)').waitFor();
@@ -530,10 +584,10 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
       await page.setViewportSize({width:430,height:760});await go('settings');
       await page.screenshot({path:path.join(out,'settings-narrow.png'),animations:'disabled'});
     }
-    await page.locator('#theme').selectOption('paper');
+    await page.locator('#theme').selectOption('mist');
     await page.reload();
     await page.waitForSelector('body[data-ready=yes]');
-    assert.equal(await page.locator('html').getAttribute('data-theme'),'paper');
+    assert.equal(await page.locator('html').getAttribute('data-theme'),'mist');
     assert.deepEqual(errors,[]);
     await update.waitFor();
     await update.getByRole('button',{name:'暂不更新'}).click();
@@ -611,6 +665,14 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     if(out)await page.screenshot({path:path.join(out,'orbit-mobile.png'),animations:'disabled'});
     await page.emulateMedia({reducedMotion:'no-preference'});
     await page.setViewportSize({width:1150,height:760});
+    const disconnectNotice=page.locator('#subscription-disconnect');
+    await go('sources');await sourceAction('refresh');
+    await page.waitForFunction(()=>!document.querySelector('[data-act=import]').disabled);
+    assert.equal(await page.getByText('订阅已更新',{exact:true}).isVisible(),false);
+    assert.equal(await disconnectNotice.isHidden(),true);
+    await go('home');
+    assert.equal(await page.locator('#traffic-state').textContent(),'已连接');
+    assert.equal(await page.getByText(/重新连接或手动选择节点后应用/).count(),0);
     await go('nodes');
     await page.locator('#node-list button[aria-pressed=false]').first().click();
     await page.getByText('正在切换节点…',{exact:true}).waitFor();
@@ -618,8 +680,28 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await page.evaluate(()=>window.finishSwitch());
     await go('home');
     await page.locator('#session-title').filter({hasText:'已连接'}).waitFor();
-    await page.locator('#power').click();
+    await page.evaluate(()=>{window.changeCurrentNode=true;});
+    await go('sources');await sourceAction('refresh');
+    await disconnectNotice.waitFor({state:'visible'});
+    const shown=Date.now();
+    assert.equal(await disconnectNotice.getAttribute('role'),'alert');
+    assert.equal(await disconnectNotice.evaluate(el=>getComputedStyle(el).position),'fixed');
+    assert.match(await disconnectNotice.textContent(),/代理已断开/);
+    await go('nodes');
+    assert.equal(await page.locator('#node-list').getByText(/代理已断开|重新连接或手动选择节点后应用/).count(),0);
+    await disconnectNotice.waitFor({state:'hidden',timeout:4200});
+    assert.ok(Date.now()-shown>=2600,'disconnect notice stays visible for about three seconds');
+    await page.waitForTimeout(1400);
+    assert.equal(await disconnectNotice.isHidden(),true);
+    await go('home');
     await page.locator('#session-title').filter({hasText:'未连接'}).waitFor();
+    await page.evaluate(()=>{window.holdStart=false;window.changeCurrentNode=false;});
+    await page.locator('#power').click();
+    await page.locator('#session[data-status=online]').waitFor();
+    await page.evaluate(()=>window.simulateAutoRefresh(true));
+    await disconnectNotice.waitFor({state:'visible'});
+    await page.locator('#session-title').filter({hasText:'未连接'}).waitFor();
+    await disconnectNotice.waitFor({state:'hidden',timeout:4200});
     await page.evaluate(()=>window.emptyFixture());
     await page.waitForTimeout(1200);
     await go('sources');
@@ -690,6 +772,6 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await go('sources');
     assert.equal(await page.locator('[data-act=import]').isEnabled(),true);
     assert.deepEqual(errors,[]);
-    console.log('PASS: centralized routing rules (keyword, regex, IP), read-only route cells with Disconnect, bilingual text, compact connection toolbar, six themes and other renderer regressions.');
+    console.log('PASS: silent unchanged refresh, manual and automatic disconnect notices and dismissal, paper default and theme persistence, centralized routing rules, bilingual text and existing renderer regressions.');
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

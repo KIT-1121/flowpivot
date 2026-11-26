@@ -48,6 +48,17 @@ IP 纯净度检测|IP Check
 点击使用|Select to use
 套餐流量已用比例|Plan usage
 暂无套餐流量 · 可尝试更新|No plan data · Try refreshing
+自动更新间隔|Auto-update interval
+间隔（小时，1–720；填 0 关闭）|Interval in hours (1–720; enter 0 to turn off)
+自动更新：关闭|Auto-update: off
+上次自动更新失败|Last auto-update failed
+只有网络订阅支持自动更新。|Only URL subscriptions support auto-update.
+请输入 0–720 之间的整数小时，0 表示关闭。|Enter a whole number from 0 to 720 hours. Enter 0 to turn off.
+已保存自动更新间隔|Auto-update interval saved
+订阅已更新|Subscription updated
+节点列表已更新，请重新选择。|The node list changed. Select a node again.
+当前节点已变更或被移除，代理已断开。|The current node changed or was removed. The proxy has disconnected.
+未能自动恢复系统代理。请检查 Windows 系统代理设置。|Could not restore the system proxy. Check the Windows proxy settings.
 总流量|Total
 已用|Used
 剩余|Remaining

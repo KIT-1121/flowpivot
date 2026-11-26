@@ -18,9 +18,9 @@ FlowPivot 是一个多内核代理客户端项目。Windows x64 功能版位于 
 
 在安装了 Playwright 和 Chromium 的 Node.js 环境中执行 `node smoke.cjs`。已有浏览器时，可设置 `FLOWPIVOT_BROWSER` 指定 Chrome 可执行文件；`FLOWPIVOT_PLAYWRIGHT` 可指定预装 Playwright 模块的路径。测试覆盖七个页面、320–1440 px 的五种视口、节点切换与延迟排序、自定义检测站点持久化，并检查没有 HTTP(S) 请求或浏览器错误。
 
-## 发布范围
+## Windows x64 · 0.2.0-alpha.22（预发布）
 
-### Windows x64 · 0.2.0-alpha.19
+更新订阅时，只有正在使用的节点配置改变或被移除才会断开代理，并弹出 3 秒提醒；其他更新不会中断连接。支持单订阅自动更新间隔（右键设置，0 为关闭）。新配置默认使用暖纸主题，已保存的主题保持不变。Windows 标题栏关闭按钮不再绘制矩形焦点框。
 
 本机代理默认固定在 `127.0.0.1:7897`。重新启动、重新连接和切换节点不会改变端口。停止代理后，可在「设置 → 本机代理端口」自定义；端口被占用时会提示，不会自动改用随机端口。
 
@@ -30,4 +30,4 @@ Git 使用 HTTPS 远程地址时，可在仓库目录配置一次。运行 Git �
 git config http.proxy http://127.0.0.1:7897
 ```
 
-Windows x64 安装包与免安装 ZIP 为预览版；公开分发状态见 [GitHub Releases](https://github.com/KIT-1121/flowpivot/releases)。本版本不包含 Android、Windows 32 位、macOS 或 Linux 安装包。
+Windows x64 安装包、免安装 ZIP、SHA-256 和第三方许可见 [GitHub Releases](https://github.com/KIT-1121/flowpivot/releases/tag/v0.2.0-alpha.22)。本版本不包含 Android、Windows 32 位、macOS 或 Linux 安装包。

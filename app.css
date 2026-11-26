@@ -14,7 +14,7 @@
   --primary:#83cdb8; --primary-hover:#9be0cc; --hero:#192b2d; --hero-line:#3b5153; --shadow:none;
 }
 * { box-sizing:border-box }
-body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 "Segoe UI","Microsoft YaHei UI","PingFang SC",system-ui,sans-serif }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei UI",system-ui,sans-serif }
 button,input { font:inherit }
 button { cursor:pointer }
 button:disabled { cursor:default }
@@ -41,10 +41,10 @@ svg { display:block }
 .nav-group-open .nav-chevron { transform:rotate(180deg) }
 .subnav { display:grid; grid-template-rows:0fr; visibility:hidden; opacity:0; transition:grid-template-rows .28s var(--ease),opacity .22s,visibility 0s .28s }
 .nav-group-open .subnav { grid-template-rows:1fr; visibility:visible; opacity:1; transition-delay:0s }
-.subnav-inner { min-height:0; overflow:hidden; display:grid; gap:3px; padding-inline:10px 0; margin-left:18px; border-left:1px solid var(--side-line) }
+.subnav-inner { min-height:0; overflow:hidden; display:grid; gap:3px; padding-inline:0; margin-left:11px }
 .sub-link { min-height:35px; font-size:13px; padding-block:5px }
 .side-bottom { margin-top:auto }
-.traffic { border-top:1px solid var(--side-line); padding:12px 5px 0; color:var(--side-text) }
+.traffic { padding:12px 5px 0; color:var(--side-text) }
 .traffic-head { display:flex; align-items:center; justify-content:space-between; gap:7px; min-height:23px }
 .traffic-state { display:flex; align-items:center; gap:7px; white-space:nowrap; font-size:13px }
 .dot { display:inline-block; width:7px; height:7px; flex:none; border-radius:50%; background:#80999a }
@@ -56,7 +56,6 @@ svg { display:block }
 .traffic-table :is(th,td) { padding:4px 0; text-align:right; white-space:nowrap }
 .traffic-table th { color:var(--side-muted); font:11px/1.4 "Segoe UI","Microsoft YaHei UI",sans-serif; font-weight:600 }
 .traffic-table :is(th,td):first-child { width:29px; text-align:left }
-.traffic-table tbody { border-top:1px solid var(--side-line) }
 .work { min-width:0 }
 main { max-width:1320px; margin-inline:auto; padding:clamp(24px,4.5vw,66px) clamp(24px,5.2vw,75px) 40px }
 .page-view { display:grid; gap:19px; min-width:0 }
@@ -65,7 +64,7 @@ main { max-width:1320px; margin-inline:auto; padding:clamp(24px,4.5vw,66px) clam
 .enter:nth-child(3) { animation-delay:.05s }
 @keyframes arrive { from{opacity:0;transform:translateY(7px)} to{opacity:1;transform:translateY(0)} }
 @keyframes pulse { 50%{opacity:.4} }
-.page-head { display:flex; justify-content:space-between; align-items:center; min-height:51px; gap:12px; padding-bottom:12px; border-bottom:1px solid var(--line) }
+.page-head { display:flex; justify-content:space-between; align-items:center; min-height:51px; gap:12px; padding-bottom:12px }
 .page-head h1 { font-size:clamp(26px,3.25vw,44px); font-weight:730; letter-spacing:-.045em; line-height:1.13; outline:none; min-width:0 }
 .card { min-width:0; border:1px solid var(--line); border-radius:9px; background:var(--surface); box-shadow:var(--shadow) }
 .button { display:inline-flex; flex:none; align-items:center; justify-content:center; gap:7px; min-height:39px; padding:6px 13px; border:1px solid var(--line); border-radius:6px; background:var(--surface); color:var(--text); font-weight:650; white-space:nowrap; transition:background .2s,border-color .2s,color .2s,transform .22s var(--ease) }
@@ -106,9 +105,8 @@ main { max-width:1320px; margin-inline:auto; padding:clamp(24px,4.5vw,66px) clam
 .route-diagram {
   --orbit-main:#77a0ff; --orbit-ice:#b4edff; --orbit-panel:#172840; --orbit-top:#19273c; --orbit-bottom:#132e37;
   position:relative; isolation:isolate; width:auto; max-width:635px; justify-self:stretch; min-width:0; margin:12px 15px 12px 0;
-  border:1px solid var(--hero-line); border-radius:16px; overflow:hidden;
-  background:radial-gradient(ellipse at 56% 47%,color-mix(in srgb,var(--orbit-main) 19%,transparent),transparent 65%),linear-gradient(145deg,var(--orbit-top),var(--orbit-bottom));
-  box-shadow:inset 0 1px 0 #fff2,0 8px 24px #151e3b18;
+  overflow:hidden;
+  background:radial-gradient(ellipse at 56% 47%,color-mix(in srgb,var(--orbit-main) 17%,transparent),transparent 68%);
 }
 .route-diagram > svg { display:block; width:100%; height:auto; color:var(--orbit-main) }
 .route-diagram text { fill:var(--hero-muted); font-size:13px; font-weight:650; text-anchor:middle; letter-spacing:.085em }
@@ -264,7 +262,7 @@ dialog::backdrop { background:#1023248a; animation:fade-in .2s ease both }
   .nav-link .icon { width:16px; height:16px }
   .nav-parent .nav-chevron { display:none }
   .subnav { position:absolute; top:48px; left:0; right:0; z-index:1 }
-  .subnav-inner { grid-template-columns:repeat(2,minmax(0,1fr)); padding-inline:0; margin-left:0; border-left:0; border-top:1px solid var(--side-line); padding-top:4px }
+  .subnav-inner { grid-template-columns:repeat(2,minmax(0,1fr)); padding-inline:0; margin-left:0; padding-top:4px }
   .sub-link { min-height:33px; font-size:12px }
   main { padding:21px clamp(13px,4vw,30px) 112px }
   .page-view { gap:14px }

@@ -19,6 +19,8 @@ internal sealed partial class ClientWindow : Form {
     private NotifyIcon tray;
     private ContextMenuStrip trayMenu;
     private AppUpdate.Candidate offeredUpdate;
+    private readonly System.Windows.Forms.Timer subscriptionTimer=new System.Windows.Forms.Timer{Interval=5000};
+    private Task<Action> subscriptionDownload;
     private int exitCode;
 
     [STAThread] private static int Main(string[] args) {
@@ -43,6 +45,8 @@ internal sealed partial class ClientWindow : Form {
         AddCaption();
         Shown+=async (o,e)=>await Boot();
         FormClosing+=OnClosing;
+        FormClosed+=(o,e)=>subscriptionTimer.Dispose();
+        subscriptionTimer.Tick+=RefreshSubscriptions;
     }
     private static bool Local(string raw) {
         Uri u;return Uri.TryCreate(raw,UriKind.Absolute,out u)&&u.Host==Host&&u.Scheme=="https"&&u.IsDefaultPort&&u.UserInfo.Length==0;
@@ -65,6 +69,7 @@ internal sealed partial class ClientWindow : Form {
             core.WebResourceRequested+=(o,e)=>{if(!Local(e.Request.Uri))e.Response=env.CreateWebResourceResponse(Stream.Null,403,"Blocked","Content-Type: text/plain");};
             core.WebMessageReceived+=OnMessage;
             busy=false;core.Navigate(Home);
+            if(report==null)subscriptionTimer.Start();
             if(report!=null) {
                 for(int i=0;i<60;i++) {
                     await Task.Delay(200);
@@ -95,7 +100,7 @@ internal sealed partial class ClientWindow : Form {
                         await TestCaption(core);
                         await TestLogs(core);
                         await TestCloseBehavior(core);
-                        File.WriteAllText(report,"PASS: production WebView2, native bridge, caption themes and minimize/restore without retained focus, light sidebar, Chinese and English captions and disclaimers, log viewer, settings and diagnostics, close behavior and tray restore.");
+                        File.WriteAllText(report,"PASS: production WebView2, native bridge, paper default, caption themes, minimize/restore without retained focus, frameless focused/default close button, Chinese and English captions and disclaimers, log viewer, settings, diagnostics and tray restore.");
                         Close(); // Hide once more, then invoke the tray's real exit command.
                         trayMenu.Items[1].PerformClick();return;
                     }
@@ -125,10 +130,18 @@ internal sealed partial class ClientWindow : Form {
                 if(saved.CloseToTray!=(value=="tray"))throw new InvalidOperationException("Close setting not saved.");
             }
         }
-        Close();
+        if(closeCaption==null)Close();
+        else{
+            // The test window can be inactive after programmatic minimize/restore.
+            closeCaption.Select();
+            if(ActiveControl!=closeCaption)throw new InvalidOperationException("Could not select Close for the tray regression.");
+            closeCaption.PerformClick();
+        }
         if(IsDisposed||Visible||tray==null||!tray.Visible)throw new InvalidOperationException("Window did not hide to tray.");
         trayMenu.Items[0].PerformClick();
         if(!Visible||tray.Visible)throw new InvalidOperationException("Window did not restore from tray.");
+        if(closeCaption!=null&&(closeCaption.Focused||ActiveControl==closeCaption))
+            throw new InvalidOperationException("Close retained focus after tray restore.");
     }
     private void RestoreWindow(){
         Show();
@@ -137,6 +150,19 @@ internal sealed partial class ClientWindow : Form {
         if(tray!=null)tray.Visible=false;
     }
     private void ExitApplication(){exitRequested=true;Close();}
+    private async void RefreshSubscriptions(object sender,EventArgs args){
+        if(busy||closing)return;
+        if(subscriptionDownload==null){subscriptionDownload=service.FetchDueSubscription();return;}
+        if(!subscriptionDownload.IsCompleted)return;
+        busy=true;
+        try{
+            var apply=await subscriptionDownload;
+            await Task.Run(apply);
+        }finally{
+            subscriptionDownload=null;busy=false;
+            if(closing)BeginInvoke((Action)Close);
+        }
+    }
     private void HideToTray(){
         if(tray==null){
             trayMenu=new ContextMenuStrip();
@@ -152,6 +178,7 @@ internal sealed partial class ClientWindow : Form {
             args.Cancel=true;HideToTray();return;
         }
         if(busy){args.Cancel=true;closing=true;return;}
+        subscriptionTimer.Stop();
         if(tray!=null){tray.Visible=false;tray.Dispose();trayMenu.Dispose();tray=null;trayMenu=null;}
         if(service!=null)try{service.Dispose();}catch(Exception){if(report==null)MessageBox.Show(this,"未能恢复系统代理。请检查 Windows 的代理设置。",Text);}
     }

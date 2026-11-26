@@ -29,6 +29,7 @@ internal sealed class ClientService : IDisposable
 {
     internal const string DefaultDelayUrl="https://www.gstatic.com/generate_204";
     internal const int DefaultLocalProxyPort=7897;
+    private const int MaxRefreshHours=720;
     private readonly string root, store, cores;
     private readonly WindowsProxy system;
     private readonly ClientModel model;
@@ -36,6 +37,12 @@ internal sealed class ClientService : IDisposable
     private readonly Dictionary<string,ParsedSource> parsed=new Dictionary<string,ParsedSource>();
     private readonly Dictionary<string,IDictionary<string,object>> delays=new Dictionary<string,IDictionary<string,object>>();
     private MihomoSession session;
+    private ParsedSource runningSource;
+    private ProxyNode runningNode;
+    private int subscriptionRevision;
+    private int subscriptionDisconnectRevision;
+    private readonly Func<DateTime> utcNow;
+    private readonly Func<string,IWebProxy,string,SubscriptionResult> download;
     private bool ownsSystem;
     private readonly bool allowStartup;
     private string activeMode,activeEngine;
@@ -43,7 +50,8 @@ internal sealed class ClientService : IDisposable
     private readonly Stopwatch rates=Stopwatch.StartNew();
     private string warning="";
     static ClientService(){ ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls12; }
-    internal ClientService(string dir,bool recover=true,string bundledRoot=null) {
+    internal ClientService(string dir,bool recover=true,string bundledRoot=null,Func<DateTime> clock=null,Func<string,IWebProxy,string,SubscriptionResult> downloader=null) {
+        utcNow=clock??(()=>DateTime.UtcNow);download=downloader??Subscription.Download;
         allowStartup=recover;root=dir;cores=bundledRoot??Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"cores");Directory.CreateDirectory(dir);store=Path.Combine(dir,"subscriptions.dat");system=new WindowsProxy(dir);
         if(recover)try {system.Recover();}catch(Exception){warning="上次系统代理未能自动恢复。请检查 Windows 系统代理设置。";}
         try {model=File.Exists(store)?LocalData.Json.Deserialize<ClientModel>(LocalData.Read(store)):null;}
@@ -54,7 +62,11 @@ internal sealed class ClientService : IDisposable
         model.DomainRoutes=TargetRouting.LoadDomainRoutes(model.DomainRoutes,model.TargetRoutes);
         model.TargetRoutes=null;
         log=new DiagnosticsLog(dir,model.LogDirectory);
-        foreach(var source in model.Sources) parsed.Add(source.Id,Subscription.WithOverride(source.Body,source.Override));
+        foreach(var source in model.Sources){
+            parsed.Add(source.Id,Subscription.WithOverride(source.Body,source.Override));
+            if(source.Url==null||source.RefreshHours<1||source.RefreshHours>MaxRefreshHours)source.RefreshHours=0;
+            if(source.NextRefreshUtcTicks<0||source.NextRefreshUtcTicks>DateTime.MaxValue.Ticks)source.NextRefreshUtcTicks=0;
+        }
         ParsedSource selected;
         if(model.Source!=null&&parsed.TryGetValue(model.Source,out selected)&&!selected.Nodes.Any(x=>x.Id==model.Node))
             model.Node=DefaultNode(selected);
@@ -92,7 +104,7 @@ internal sealed class ClientService : IDisposable
     private static readonly Dictionary<string,string> LogActions=new Dictionary<string,string>{
         {"import","导入订阅"},{"refresh","更新订阅"},{"replace-url","替换订阅链接"},{"select-source","切换订阅"},
         {"select-node","选择节点"},{"remove","移除订阅"},{"start","启动代理"},{"stop","停止代理"},
-        {"delay","节点测速"},{"check","连通性检测"},{"ip","IP 检测"},{"domain-route","修改分流规则"},{"local-proxy-port","设置本机代理端口"}
+        {"delay","节点测速"},{"check","连通性检测"},{"ip","IP 检测"},{"domain-route","修改分流规则"},{"local-proxy-port","设置本机代理端口"},{"refresh-interval","设置订阅自动更新"}
     };
     private object RunAction(string action,IDictionary<string,object> args,Action<object> progress) {
         if(action=="logs-read")return log.Read();
@@ -103,10 +115,14 @@ internal sealed class ClientService : IDisposable
             case "snapshot":return Snapshot();
             case "import":Import(args);break;
             case "select-source": {var s=Source(LocalData.Text(args,"id"));if(s.Id!=model.Source){Stop();model.Source=s.Id;model.Node=DefaultNode(parsed[s.Id]);Save();}break;}
-            case "select-node": SelectNode(LocalData.Text(args,"id"));break;
+            case "select-node":
+                if(args.ContainsKey("revision")&&(LocalData.Text(args,"source")!=model.Source||LocalData.Number(args,"revision")!=Source(model.Source).NodeRevision))
+                    throw new InvalidOperationException("节点列表已更新，请重新选择。");
+                SelectNode(LocalData.Text(args,"id"));break;
             case "rename": Source(LocalData.Text(args,"id")).Name=Name(LocalData.Text(args,"name"));Save();break;
             case "remove": {var s=Source(LocalData.Text(args,"id"));if(s.Id==model.Source){Stop();model.Source=null;model.Node=null;}model.Sources.Remove(s);parsed.Remove(s.Id);delays.Remove(s.Id);Save();break;}
             case "refresh": Update(Source(LocalData.Text(args,"id")),null);break;
+            case "refresh-interval": SetRefreshInterval(Source(LocalData.Text(args,"id")),LocalData.Text(args,"value"));break;
             case "replace-url": Update(Source(LocalData.Text(args,"id")),LocalData.Text(args,"url"));break;
             case "source-yaml": return Subscription.ExportYaml(parsed[Source(LocalData.Text(args,"id")).Id]);
             case "source-yaml-save": SaveYamlCopy(Source(LocalData.Text(args,"id")),LocalData.Text(args,"body"));break;
@@ -156,7 +172,7 @@ internal sealed class ClientService : IDisposable
         if(model.Sources.Count>=20)throw new InvalidOperationException("最多保存 20 个订阅。");
         string input=LocalData.Text(args,"input").Trim(), name=LocalData.Text(args,"name").Trim();
         string url=input.StartsWith("https://",StringComparison.OrdinalIgnoreCase)&&!input.Any(char.IsWhiteSpace)&&LocalData.Text(args,"origin")!="file"?input:null;
-        var fetched=url==null?new SubscriptionResult{Body=input,Data=Subscription.Parse(input)}:Subscription.Download(url,SessionOrSystemProxy(),null);
+        var fetched=url==null?new SubscriptionResult{Body=input,Data=Subscription.Parse(input)}:download(url,SessionOrSystemProxy(),null);
         var data=fetched.Data;
         var source=new SourceRecord{Body=fetched.Body,Url=url,Quota=fetched.Quota,Name=name.Length==0?"订阅 "+(model.Sources.Count+1):Name(name),Id=Guid.NewGuid().ToString("N")};
         var previousSource=model.Source;var previousNode=model.Node;
@@ -167,18 +183,76 @@ internal sealed class ClientService : IDisposable
     private void Update(SourceRecord source,string newUrl) {
         string url=newUrl??source.Url;
         if(string.IsNullOrEmpty(url))throw new InvalidOperationException("请输入新的 HTTPS 订阅链接。");
-        var fetched=Subscription.Download(url,SessionOrSystemProxy(),source.Override);
+        ApplyUpdate(source,url,download(url,SessionOrSystemProxy(),source.Override));
+    }
+    private long NextRefresh(int hours){return hours==0?0:utcNow().AddHours(hours).Ticks;}
+    private void SetRefreshInterval(SourceRecord source,string value) {
+        if(source.Url==null)throw new InvalidOperationException("只有网络订阅支持自动更新。");
+        int hours;
+        if(!int.TryParse(value.Trim(),NumberStyles.None,CultureInfo.InvariantCulture,out hours)||hours<0||hours>MaxRefreshHours)
+            throw new InvalidOperationException("请输入 0–720 之间的整数小时，0 表示关闭。");
+        int previous=source.RefreshHours;long previousDue=source.NextRefreshUtcTicks;
+        source.RefreshHours=hours;source.NextRefreshUtcTicks=NextRefresh(hours);
+        try{Save();}catch{source.RefreshHours=previous;source.NextRefreshUtcTicks=previousDue;throw;}
+        source.RefreshRevision++;source.AutoRefreshFailed=false;subscriptionRevision++;
+    }
+    // Start on the serialized UI dispatcher. Fetch without holding it, then commit back on it.
+    internal Task<Action> FetchDueSubscription() {
+        long now=utcNow().Ticks;
+        var source=model.Sources.Where(s=>s.Url!=null&&s.RefreshHours>0&&s.NextRefreshUtcTicks<=now)
+            .OrderBy(s=>s.NextRefreshUtcTicks).FirstOrDefault();
+        if(source==null)return null;
+        var url=source.Url;var patch=source.Override;var revision=source.RefreshRevision;var proxy=SessionOrSystemProxy();
+        return Task.Run<Action>(()=>{
+            SubscriptionResult result=null;Exception failure=null;
+            try{result=download(url,proxy,patch);}catch(Exception e){failure=e;}
+            return ()=>{
+                if(!model.Sources.Contains(source)||source.RefreshRevision!=revision)return;
+                if(failure==null)try{ApplyUpdate(source,url,result);}catch(Exception e){failure=e;}
+                if(failure==null){log.Write("订阅自动更新完成");return;}
+                source.NextRefreshUtcTicks=NextRefresh(source.RefreshHours);
+                source.AutoRefreshFailed=true;subscriptionRevision++;
+                log.Write("订阅自动更新失败",failure);
+                try{Save();}catch(Exception e){log.Write("未能保存下次订阅更新时间",e);}
+            };
+        });
+    }
+    private void ApplyUpdate(SourceRecord source,string url,SubscriptionResult fetched) {
         string body=fetched.Body;var data=fetched.Data;
         bool nodesChanged=source.Body!=body;
+        bool activeRefresh=nodesChanged&&source.Id==model.Source;
+        var liveNode=activeRefresh&&session!=null?runningNode:null;
+        ProxyNode equivalent=null;
         string previousBody=source.Body,previousUrl=source.Url,previousNode=model.Node;var previousQuota=source.Quota;
-        if(nodesChanged&&source.Id==model.Source){
-            Stop();
-            var previous=parsed[source.Id].Nodes.FirstOrDefault(n=>n.Id==model.Node);
-            model.Node=previous==null?DefaultNode(data):data.Nodes.Where(n=>n.Name==previous.Name&&n.Kind==previous.Kind).Select(n=>n.Id).FirstOrDefault()??DefaultNode(data);
+        long previousDue=source.NextRefreshUtcTicks;
+        if(activeRefresh){
+            // FP IDs are positional. Check the endpoint configuration, not the list order or display name.
+            var selected=parsed[source.Id].Nodes.FirstOrDefault(n=>n.Id==model.Node);
+            var previous=liveNode??selected;
+            if(previous!=null)equivalent=data.Nodes.FirstOrDefault(n=>n.Name==(selected??previous).Name&&Subscription.SameNodeConfig(n,previous))
+                ??data.Nodes.FirstOrDefault(n=>Subscription.SameNodeConfig(n,previous));
+            var named=selected??previous;
+            var match=equivalent??(named==null?null:data.Nodes.FirstOrDefault(n=>n.Name==named.Name&&n.Kind==named.Kind));
+            model.Node=match==null?DefaultNode(data):match.Id;
         }
-        source.Body=body;source.Url=url;source.Quota=fetched.Quota;
-        try{Save();}catch{source.Body=previousBody;source.Url=previousUrl;source.Quota=previousQuota;model.Node=previousNode;throw;}
-        if(nodesChanged){parsed[source.Id]=data;delays.Remove(source.Id);}
+        source.Body=body;source.Url=url;source.Quota=fetched.Quota;source.NextRefreshUtcTicks=NextRefresh(source.RefreshHours);
+        try{Save();}catch{source.Body=previousBody;source.Url=previousUrl;source.Quota=previousQuota;source.NextRefreshUtcTicks=previousDue;model.Node=previousNode;throw;}
+        if(nodesChanged){
+            parsed[source.Id]=data;delays.Remove(source.Id);source.NodeRevision++;
+        }
+        source.RefreshRevision++;source.AutoRefreshFailed=false;subscriptionRevision++;
+        if(liveNode==null)return;
+        if(equivalent==null){
+            // Commit first: failed downloads or writes must not disconnect a working session.
+            try{Stop();warning="";}
+            catch(Exception e){warning="未能自动恢复系统代理。请检查 Windows 系统代理设置。";log.Write("订阅更新后停止代理时发生错误",e);}
+            subscriptionDisconnectRevision++;
+            log.Write("当前节点已变更或移除，已停止代理");
+        }else if(liveNode.Id==equivalent.Id&&runningSource.Nodes.Count==data.Nodes.Count&&
+            runningSource.Nodes.Zip(data.Nodes,(a,b)=>a.Id==b.Id&&Subscription.SameNodeConfig(a,b)).All(equal=>equal)){
+            // All IDs still refer to the same configs, so the live selector can safely use the new list.
+            runningSource=data;runningNode=equivalent;
+        }
     }
     private void SaveYamlCopy(SourceRecord source,string body){
         if(model.Sources.Count>=20)throw new InvalidOperationException("最多保存 20 个订阅。");
@@ -200,7 +274,7 @@ internal sealed class ClientService : IDisposable
             if(!data.Nodes.Any(n=>n.Id==model.Node))model.Node=DefaultNode(data);
         }
         try{Save();}catch{source.Override=previous;model.Node=node;throw;}
-        parsed[source.Id]=data;delays.Remove(source.Id);
+        parsed[source.Id]=data;delays.Remove(source.Id);source.RefreshRevision++;source.NodeRevision++;
     }
     private string CorePath(string id) {
         var asset=CoreAsset.Pick(id);
@@ -253,6 +327,7 @@ internal sealed class ClientService : IDisposable
     }
     private void OpenSession(ParsedSource data,string id,string engine,string mode){
         session=new MihomoSession(CorePath("Mihomo"),root,data,id,engine,CorePath(engine),mode=="tun",model.LocalProxyPort,model.DomainRoutes);
+        runningSource=data;runningNode=data.Nodes.Single(n=>n.Id==id);
         activeMode=mode;activeEngine=engine;
     }
     private void ChangeDomainRoute(IDictionary<string,object> args){
@@ -297,20 +372,20 @@ internal sealed class ClientService : IDisposable
     private void SelectNode(string id){
         var data=Active();var next=data.Nodes.Find(n=>n.Id==id);
         if(next==null)throw new InvalidOperationException("找不到该节点。");
-        var previous=model.Node;if(id==previous)return;
+        var previous=model.Node;if(id==previous&&(session==null||Subscription.SameNodeConfig(next,runningNode)))return;
         if(session==null){model.Node=id;try{Save();}catch{model.Node=previous;throw;}return;}
-        var mode=activeMode;var previousEngine=activeEngine;
+        var mode=activeMode;var previousEngine=activeEngine;var oldSource=runningSource;var oldNode=runningNode;
         var engine=ValidateEngine(next,mode);
-        bool live=session.CanSelect&&next.Native==null;
+        bool live=oldSource==data&&session.CanSelect&&next.Native==null;
         try{
-            if(live)session.Select(id);
+            if(live){session.Select(id);runningNode=next;}
             else{CloseSession();OpenSession(data,id,engine,mode);}
             model.Node=id;Save();warning="";
         }catch(Exception){
             model.Node=previous;
             try{
-                if(live&&session!=null&&session.Alive)session.Select(previous);
-                else{CloseSession();OpenSession(data,previous,previousEngine,mode);}
+                if(live&&session!=null&&session.Alive){session.Select(oldNode.Id);runningNode=oldNode;}
+                else{CloseSession();OpenSession(oldSource,oldNode.Id,previousEngine,mode);}
             }catch(Exception){
                 Stop();warning="节点切换失败，未能恢复原连接。";
                 throw new InvalidOperationException(warning);
@@ -319,6 +394,7 @@ internal sealed class ClientService : IDisposable
         }
     }
     private void CloseSession(){
+        runningSource=null;runningNode=null;
         if(session!=null){
             try{if(session.Alive){var stats=session.Get("/connections",1000);totalUp=baseUp+LocalData.Number(stats,"uploadTotal");totalDown=baseDown+LocalData.Number(stats,"downloadTotal");}}catch(WebException){}catch(IOException){}
             finally{var old=session;session=null;old.Dispose();}
@@ -328,6 +404,10 @@ internal sealed class ClientService : IDisposable
     private void Stop() {
         try {if(ownsSystem){system.Recover();ownsSystem=false;}}
         finally {CloseSession();}
+    }
+    private string SelectableName(ParsedSource nodes){
+        var selected=nodes==null?null:nodes.Nodes.FirstOrDefault(n=>n.Id==model.Node);
+        return selected==null?runningNode.Name:selected.Name;
     }
     private object Snapshot() {
         long up=totalUp,down=totalDown;
@@ -355,7 +435,9 @@ internal sealed class ClientService : IDisposable
         ParsedSource nodes=null; if(model.Source!=null)parsed.TryGetValue(model.Source,out nodes);
         IDictionary<string,object> nodeDelays=null;if(model.Source!=null)delays.TryGetValue(model.Source,out nodeDelays);
         return new { appVersion=AppUpdate.Version, online=session!=null, system=ownsSystem, canTun=Elevated(), mode=activeMode, engine=session==null?null:activeEngine, port=session==null?0:session.Port, localProxyPort=model.LocalProxyPort, warning, autoStart=StartupEnabled(), closeToTray=CloseToTray, delayUrl=model.DelayUrl??DefaultDelayUrl, preferred=model.Preferred??"Xray",
-            cores=CoreAsset.Catalog.Select(c=>new{id=c.Id,version=CorePath(c.Id).Length>0?c.Version:""}).ToArray(), sources=model.Sources.Select(x=>new{ id=x.Id,name=x.Name,format=parsed[x.Id].Format,count=parsed[x.Id].Nodes.Count,skipped=parsed[x.Id].Skipped,refreshable=x.Url!=null,yaml=parsed[x.Id].Nodes[0].Data!=null,quota=x.Quota==null?null:new{total=x.Quota.Total,used=x.Quota.Used,remaining=x.Quota.Remaining} }).ToArray(),
+            runningNodeName=runningNode==null?null:SelectableName(nodes), subscriptionDisconnectRevision, subscriptionRevision,
+            nodeRevision=nodes==null?0:Source(model.Source).NodeRevision,
+            cores=CoreAsset.Catalog.Select(c=>new{id=c.Id,version=CorePath(c.Id).Length>0?c.Version:""}).ToArray(), sources=model.Sources.Select(x=>new{ id=x.Id,name=x.Name,format=parsed[x.Id].Format,count=parsed[x.Id].Nodes.Count,skipped=parsed[x.Id].Skipped,refreshable=x.Url!=null,refreshHours=x.RefreshHours,nextRefresh=x.RefreshHours>0?new DateTime(x.NextRefreshUtcTicks,DateTimeKind.Utc).ToString("o",CultureInfo.InvariantCulture):null,autoRefreshFailed=x.AutoRefreshFailed,yaml=parsed[x.Id].Nodes[0].Data!=null,quota=x.Quota==null?null:new{total=x.Quota.Total,used=x.Quota.Used,remaining=x.Quota.Remaining} }).ToArray(),
             source=model.Source,node=model.Node,nodes=nodes==null?null:nodes.Nodes.Select(x=>new{id=x.Id,name=x.Name,kind=x.Kind,engine=Engine(x),ready=CorePath("Mihomo").Length>0&&CorePath(Engine(x)).Length>0,delay=nodeDelays!=null && nodeDelays.ContainsKey(x.Id)?nodeDelays[x.Id]:null}).ToArray(),
             traffic=new{up,down,rateUp,rateDown}, connections=new{direct,routed,total=direct+routed,rows},
             domainRoutes=model.DomainRoutes.Select(r=>new{id=r.Id,kind=r.Kind,pattern=r.Pattern,value=r.Value}).ToArray() };
@@ -380,7 +462,7 @@ internal sealed class ClientService : IDisposable
                 finish(n.Id,delay);
             });
         } else {
-            var probe=session??new MihomoSession(CorePath("Mihomo"),root,data,batch[0].Id);
+            var probe=session!=null&&runningSource==data?session:new MihomoSession(CorePath("Mihomo"),root,data,batch[0].Id);
             try {
                 Parallel.ForEach(batch,new ParallelOptions{MaxDegreeOfParallelism=6},n=>{
                     object delay="failed";

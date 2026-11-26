@@ -19,6 +19,97 @@ internal static class LoopbackTest {
     try{var stream=client.GetStream();stream.ReadTimeout=1600;var bytes=System.Text.Encoding.ASCII.GetBytes("GET http://"+target+"/hold HTTP/1.1\r\nHost: "+target+"\r\n\r\n");stream.Write(bytes,0,bytes.Length);if(stream.ReadByte()!='H')throw new IOException("Connection was not held");return client;}
     catch{client.Dispose();throw;}
   }
+  private static void RefreshRegression(string cores,string root,int localPort,int first,int second){
+    var now=new DateTime(2026,1,1,0,0,0,DateTimeKind.Utc);
+    string one="  - {name: Test, type: http, server: 127.0.0.1, port: "+first+"}\n";
+    string two="  - {name: Alternate, type: http, server: 127.0.0.1, port: "+second+"}\n";
+    string original="proxies:\n"+one+two, body=original;
+    const string revision="subscriptionDisconnectRevision";
+    bool fail=false;int requests=0;
+    Func<string,IWebProxy,string,SubscriptionResult> fetch=(url,proxy,patch)=>{
+      Interlocked.Increment(ref requests);
+      if(fail)throw new InvalidOperationException("Fixture network failure");
+      return new SubscriptionResult{Body=body,Data=Subscription.WithOverride(body,patch),Quota=new SubscriptionQuota{Total=100,Used=25,Remaining=75}};
+    };
+    using(var service=new ClientService(root,false,cores,()=>now,fetch)){
+      var s=Call(service,"import",Args("input","https://subscription.invalid/example"));
+      string id=LocalData.Text(LocalData.Rows(s,"sources").Single(),"id");
+      s=Call(service,"import",Args("input","https://other.invalid/example"));
+      string other=LocalData.Text(LocalData.Rows(s,"sources").Last(),"id");
+      Call(service,"local-proxy-port",Args("value",localPort.ToString()));
+      Call(service,"start",Args("mode","local"));
+      Func<string> request=()=>{int status;return Subscription.Request(new Uri("http://example.invalid/ping"),new WebProxy("http://127.0.0.1:"+localPort),30,out status,false);};
+      Assert(request()=="hello","refresh fixture forwards through original node");
+      body=original+"\n# changed metadata\n";
+      using(var held=Hold(localPort,"example.invalid")){
+        var before=LocalData.Rows(LocalData.Obj(Call(service,"snapshot",Args()),"connections"),"rows").Select(r=>LocalData.Text(r,"id")).ToArray();
+        s=Call(service,"refresh",Args("id",id));
+        Assert(Convert.ToBoolean(s["online"])&&LocalData.Number(s,revision)==0&&LocalData.Number(s,"port")==localPort&&before.Length>0&&
+          LocalData.Rows(LocalData.Obj(s,"connections"),"rows").Any(r=>before.Contains(LocalData.Text(r,"id"))),"metadata-only refresh keeps an existing connection and listening port");
+      }
+      body="proxies:\n"+two+one.Replace("name: Test","name: Renamed");
+      s=Call(service,"refresh",Args("id",id));
+      Assert(Convert.ToBoolean(s["online"])&&LocalData.Number(s,revision)==0&&LocalData.Text(s,"node")=="FP-002"&&LocalData.Text(s,"runningNodeName")=="Renamed"&&request()=="hello","rename and reorder retain the live upstream and map the saved selection");
+      body="proxies:\n"+two.Replace("port: "+second,"port: "+first)+one.Replace("name: Test","name: Renamed");
+      s=Call(service,"refresh",Args("id",id));
+      Assert(Convert.ToBoolean(s["online"])&&LocalData.Number(s,revision)==0&&LocalData.Text(s,"runningNodeName")=="Renamed"&&request()=="hello","another node changing does not signal a disconnect or steal the selection");
+      body="proxies:\n"+two;
+      s=Call(service,"refresh",Args("id",other));
+      Assert(Convert.ToBoolean(s["online"])&&request()=="hello","refreshing an inactive subscription leaves current forwarding alone");
+      fail=true;bool rejected=false;
+      try{Call(service,"refresh",Args("id",id));}catch(InvalidOperationException){rejected=true;}
+      Assert(rejected&&request()=="hello","failed manual refresh preserves forwarding");
+      fail=false;body="broken";
+      rejected=false;try{Call(service,"refresh",Args("id",id));}catch(InvalidOperationException){rejected=true;}
+      Assert(rejected&&request()=="hello","invalid refreshed content preserves forwarding");
+      body="proxies:\n"+two;
+      var blockedWrite=Path.Combine(root,"subscriptions.dat.tmp");
+      Directory.CreateDirectory(blockedWrite);
+      rejected=false;
+      try{Call(service,"refresh",Args("id",id));}
+      catch(UnauthorizedAccessException){rejected=true;}
+      finally{Directory.Delete(blockedWrite);}
+      s=Call(service,"snapshot",Args());
+      Assert(rejected&&request()=="hello"&&LocalData.Number(s,revision)==0&&LocalData.Text(s,"runningNodeName")=="Renamed","failed persistence retains the old node, forwarding and disconnect revision");
+      body=original;
+      Call(service,"refresh-interval",Args("id",id,"value","2"));
+      Assert(service.FetchDueSubscription()==null,"automatic refresh waits for configured interval");
+      now=now.AddHours(2);
+      var apply=service.FetchDueSubscription().Result;
+      apply();
+      s=Call(service,"snapshot",Args());
+      Assert(Convert.ToBoolean(s["online"])&&LocalData.Number(s,revision)==0&&LocalData.Text(s,"node")=="FP-001"&&request()=="hello"&&service.FetchDueSubscription()==null,"due automatic refresh runs once, keeps connection and advances schedule");
+      using(var reopened=new ClientService(root,false,cores,()=>now,fetch)){
+        var record=LocalData.Rows(Call(reopened,"snapshot",Args()),"sources").First();
+        Assert(LocalData.Number(record,"refreshHours")==2&&reopened.FetchDueSubscription()==null,"interval and next due time survive reload");
+      }
+      now=now.AddHours(2);fail=true;service.FetchDueSubscription().Result();
+      s=Call(service,"snapshot",Args());
+      Assert(Convert.ToBoolean(LocalData.Rows(s,"sources").First()["autoRefreshFailed"])&&service.FetchDueSubscription()==null&&request()=="hello","failed automatic refresh backs off and retains live session");
+      now=now.AddHours(2);fail=false;body="proxies:\n"+two;
+      apply=service.FetchDueSubscription().Result;
+      Call(service,"refresh-interval",Args("id",id,"value","0"));apply();
+      s=Call(service,"snapshot",Args());
+      Assert(LocalData.Rows(s,"nodes").Count()==2&&service.FetchDueSubscription()==null,"disabling automatic update discards an in-flight stale result");
+      Func<bool> listening=()=>{
+        try{using(var probe=new TcpClient("127.0.0.1",localPort))return true;}
+        catch(SocketException){return false;}
+      };
+      body="proxies:\n"+two.Replace("name: Alternate","name: Test");
+      s=Call(service,"refresh",Args("id",id));
+      Assert(!Convert.ToBoolean(s["online"])&&LocalData.Number(s,revision)==1&&!listening(),"manual refresh of a changed endpoint stops forwarding and signals once");
+      s=Call(service,"snapshot",Args());
+      Assert(LocalData.Number(s,revision)==1&&!Convert.ToBoolean(s["online"]),"snapshot does not repeat the event or reconnect automatically");
+      s=Call(service,"start",Args("mode","local"));
+      Assert(Convert.ToBoolean(s["online"])&&LocalData.Number(s,"port")==localPort&&request()=="other","manual start uses the updated endpoint on the same port");
+      Call(service,"refresh-interval",Args("id",id,"value","1"));
+      now=now.AddHours(1);body="proxies:\n"+one.Replace("name: Test","name: Replacement");
+      service.FetchDueSubscription().Result();
+      s=Call(service,"snapshot",Args());
+      Assert(!Convert.ToBoolean(s["online"])&&LocalData.Number(s,revision)==2&&!listening()&&service.FetchDueSubscription()==null,"automatic refresh removing the running node disconnects without reconnecting");
+      Assert(requests>=8,"fixture exercised manual and automatic downloads");
+    }
+  }
   private static void DomainDirect(string cores,string root,IPEndPoint destination,int upstreamPort){
     // Test-only host mappings keep the entire exercise local without touching Windows DNS.
     const string matching="api.baidu.test", other="api.other.test";
@@ -80,6 +171,10 @@ internal static class LoopbackTest {
     return 0;
   }
   private static int SubscriptionResponses(){
+    var left=new ProxyNode{Kind="fixture",Native=LocalData.Parse("{\"settings\":{\"a\":1,\"b\":[2,3]},\"tag\":\"upstream\"}")};
+    var reordered=new ProxyNode{Kind="fixture",Native=LocalData.Parse("{\"tag\":\"upstream\",\"settings\":{\"b\":[2,3],\"a\":1}}")};
+    var changed=new ProxyNode{Kind="fixture",Native=LocalData.Parse("{\"tag\":\"upstream\",\"settings\":{\"b\":[3,2],\"a\":1}}")};
+    Assert(Subscription.SameNodeConfig(left,reordered)&&!Subscription.SameNodeConfig(left,changed),"native JSON key order is immaterial but array order is retained");
     const string yaml="proxies:\n  - {name: Fixture, type: http, server: 127.0.0.1, port: 18080}\n";
     var quota=SubscriptionQuota.Parse("upload=9; download=11; total=80; expire=99");
     Assert(quota.Total==80&&quota.Used==20&&quota.Remaining==60,"subscription quota splits total, used and remaining");
@@ -446,6 +541,8 @@ internal static class LoopbackTest {
         Assert(LocalData.Text(s,"node")=="FP-001","DPAPI persistence");
         Assert(LocalData.Number(s,"localProxyPort")==fixedPort&&LocalData.Number(Call(service,"start",Args("mode","local")),"port")==fixedPort,"reopening profile restores the live listening port");
       }
+      release.Reset();
+      RefreshRegression(a[0],Path.Combine(a[1],"refresh-regression"),fixedPort,port,alternatePort);
     }finally{release.Set();listener.Stop();alternate.Stop();Task.WaitAll(new[]{accept,acceptAlternate},2000);}
     return 0;
   }

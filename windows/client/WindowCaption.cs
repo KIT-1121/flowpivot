@@ -65,13 +65,13 @@ internal sealed partial class ClientWindow {
             var point=caption.PointToScreen(e.Location);
             SendMessage(Handle,0x00A1,new IntPtr(2),new IntPtr((point.X&0xffff)|((point.Y&0xffff)<<16))); // HTCAPTION (native drag)
         };
-        closeCaption=AddCaptionButton("关闭窗口","×",()=>Close());
+        closeCaption=AddCaptionButton("关闭窗口","×",CloseFromCaption);
         maximizeCaption=AddCaptionButton("最大化","□",ToggleMaximize);
         minimizeCaption=AddCaptionButton("最小化","−",MinimizeWindow);
         Resize+=(o,e)=>UpdateMaximizeLabel();
         Controls.Add(caption);
         caption.SendToBack();
-        ApplyCaptionTheme("glass");
+        ApplyCaptionTheme("paper");
     }
     private void MinimizeWindow(){
         // WinForms restores the active child with the window. Do not leave the
@@ -79,8 +79,30 @@ internal sealed partial class ClientWindow {
         if(minimizeCaption.Focused||ActiveControl==minimizeCaption)ActiveControl=view;
         WindowState=FormWindowState.Minimized;
     }
+    private void CloseFromCaption(){
+        // Restore focus to the content rather than to the window button when
+        // Close hides the form and the user later reopens it from the tray.
+        if(closeCaption.Focused||ActiveControl==closeCaption)ActiveControl=view;
+        Close();
+    }
+    private sealed class CaptionButton : Button {
+        protected override void OnPaint(PaintEventArgs e){
+            // Draw without the WinForms flat-button focus/default frames.
+            // Keep Button's keyboard, accessibility, and click handling.
+            bool hover=ClientRectangle.Contains(PointToClient(MousePosition));
+            bool pressed=hover&&Capture&&(MouseButtons&MouseButtons.Left)!=0;
+            var fill=pressed?FlatAppearance.MouseDownBackColor:hover?FlatAppearance.MouseOverBackColor:BackColor;
+            e.Graphics.Clear(fill.IsEmpty?BackColor:fill);
+            TextRenderer.DrawText(e.Graphics,Text,Font,ClientRectangle,ForeColor,
+                TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.NoPrefix|TextFormatFlags.SingleLine);
+            if(Focused&&ShowFocusCues){
+                int half=Math.Max(4,Width/10), y=Height*3/4;
+                using(var pen=new Pen(ForeColor,Math.Max(1f,DeviceDpi/96f)))e.Graphics.DrawLine(pen,Width/2-half,y,Width/2+half,y);
+            }
+        }
+    }
     private Button AddCaptionButton(string label,string glyph,Action action){
-        var button=new Button{Text=glyph,AccessibleName=label,Dock=DockStyle.Right,Width=44,FlatStyle=FlatStyle.Flat,UseVisualStyleBackColor=false};
+        var button=new CaptionButton{Text=glyph,AccessibleName=label,Dock=DockStyle.Right,Width=44,FlatStyle=FlatStyle.Flat,UseVisualStyleBackColor=false};
         button.FlatAppearance.BorderSize=0;
         button.Click+=(o,e)=>action();
         caption.Controls.Add(button);button.BringToFront();
@@ -90,7 +112,7 @@ internal sealed partial class ClientWindow {
         Color bg, hover;
         bool dark=theme=="dark"||theme=="ink";
         switch(theme){
-            case "glass": bg=Color.FromArgb(210,225,245);hover=Color.FromArgb(186,209,240);break;
+            case "glass": bg=Color.FromArgb(241,243,247);hover=Color.FromArgb(222,228,237);break;
             case "light": bg=Color.FromArgb(243,245,245);hover=Color.FromArgb(220,233,231);break;
             case "dark": bg=Color.FromArgb(17,26,28);hover=Color.FromArgb(41,59,62);break;
             case "mist": bg=Color.FromArgb(225,232,237);hover=Color.FromArgb(205,219,229);break;
@@ -105,11 +127,14 @@ internal sealed partial class ClientWindow {
             foreach(var button in new[]{minimizeCaption,maximizeCaption,closeCaption}){
                 button.BackColor=bg;button.ForeColor=text;
                 button.FlatAppearance.MouseOverBackColor=button==closeCaption?(dark?Color.FromArgb(109,46,54):Color.FromArgb(255,187,191)):hover;
+                button.FlatAppearance.MouseDownBackColor=ControlPaint.Dark(button.FlatAppearance.MouseOverBackColor,.12f);
             }
         }
         if(!SystemInformation.HighContrast){BackColor=bg;view.DefaultBackgroundColor=bg;}
     }
     private async Task TestCaption(CoreWebView2 core){
+        if(captionTheme!="paper"||await core.ExecuteScriptAsync("document.documentElement.dataset.theme")!="\"paper\"")
+            throw new InvalidOperationException("Fresh profiles should default to paper in WebView and the caption.");
         await core.ExecuteScriptAsync("document.querySelector('[data-route=settings]').click();");
         foreach(var option in new[]{"en","zh-CN"}){
             string expected=option=="en"?"FlowPivot":"流枢";
@@ -153,6 +178,10 @@ internal sealed partial class ClientWindow {
         maximizeCaption.PerformClick();
         if(WindowState!=FormWindowState.Normal)throw new InvalidOperationException("Caption did not restore.");
         Activate();
+        if(!closeCaption.TabStop||!closeCaption.Focus())throw new InvalidOperationException("Close button is not keyboard focusable.");
+        closeCaption.NotifyDefault(true);
+        try{TestCloseCaptionBorder();}
+        finally{closeCaption.NotifyDefault(false);}
         if(!minimizeCaption.Focus())throw new InvalidOperationException("Could not focus minimize for the restore regression.");
         minimizeCaption.PerformClick();
         if(WindowState!=FormWindowState.Minimized)throw new InvalidOperationException("Caption did not minimize.");
@@ -160,5 +189,15 @@ internal sealed partial class ClientWindow {
         await Task.Delay(100);
         if(minimizeCaption.Focused||ActiveControl==minimizeCaption)
             throw new InvalidOperationException("Minimize retained the focus outline after restore.");
+    }
+    private void TestCloseCaptionBorder(){
+        using(var snapshot=new Bitmap(closeCaption.Width,closeCaption.Height)){
+            closeCaption.DrawToBitmap(snapshot,new Rectangle(Point.Empty,closeCaption.ClientSize));
+            var fill=snapshot.GetPixel(0,0);
+            for(int x=0;x<snapshot.Width;x++)
+                for(int y=0;y<snapshot.Height;y++)
+                    if((x<3||x>=snapshot.Width-3||y<3||y>=snapshot.Height-3)&&snapshot.GetPixel(x,y)!=fill)
+                        throw new InvalidOperationException("Close button drew an outer focus/default frame.");
+        }
     }
 }

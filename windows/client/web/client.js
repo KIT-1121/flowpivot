@@ -62,12 +62,12 @@ let connectionQuery='';
 const routeLabels={direct:'直连',proxy:'代理'};
 const routeKinds={keyword:'域名关键词',regex:'域名正则',exact:'精确域名',ip:'IP 地址'};
 const themes={glass:'玻璃',light:'浅色',dark:'深色',mist:'雾蓝',paper:'暖纸',ink:'墨蓝'};
-const savedTheme=load('theme','glass');
+const defaultTheme='paper', savedTheme=load('theme',defaultTheme);
 function applyTheme(theme){
   document.documentElement.dataset.theme=theme;
   void nativeCall('theme',{value:theme}).catch(()=>{});
 }
-applyTheme(Object.hasOwn(themes,savedTheme)?savedTheme:'glass');
+applyTheme(Object.hasOwn(themes,savedTheme)?savedTheme:defaultTheme);
 function nativeCall(action,args={},onProgress) {
   if(!native)return Promise.reject(new Error('请在 FlowPivot Windows 客户端中打开。'));
   const id=++serial;
@@ -78,33 +78,48 @@ function nativeCall(action,args={},onProgress) {
 }
 native?.addEventListener('message',e=>{const d=e.data,r=requests.get(d?.id);if(!r)return;if(d.progress){r.onProgress?.(d.progress);return;}requests.delete(d.id);clearTimeout(r.timeout);d.ok?r.resolve(d.body):r.reject(new Error(d.body));});
 function toast(message){const t=$('#toast');t.textContent=tr(message);t.classList.add('visible','show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('visible','show'),3800);}
-const glyphs={home:'home',sources:'archive',nodes:'network',connections:'activity',settings:'settings'};
+let disconnectNoticeTimer;
+function takeSnapshot(next){
+  const previous=snapshot;
+  snapshot=next;
+  const disconnected=(next.subscriptionDisconnectRevision??0)>(previous?.subscriptionDisconnectRevision??0);
+  if(disconnected){
+    const notice=$('#subscription-disconnect');
+    $('span',notice).textContent=tr('当前节点已变更或被移除，代理已断开。');
+    notice.hidden=false;
+    clearTimeout(disconnectNoticeTimer);
+    disconnectNoticeTimer=setTimeout(()=>{notice.hidden=true;},3000);
+  }
+}
+const glyphs={home:'home',sources:'archive',nodes:'network',connections:'activity',settings:'settings',reach:'activity',ip:'globe'};
 const badge=(text,kind='')=>`<span class="badge ${kind}">${html(text)}</span>`;
 const square=glyph=>`<span class="square">${icon(glyph)}</span>`;
 function heading(action=''){return `<header class="page-head enter"><h1 tabindex="-1">${labels[route]}</h1>${action}</header>`;}
 function button(text,act,extra='',primary=false,glyph='',classes=''){return `<button class="button${primary?' primary':''} ${classes}" type="button" data-act="${act}" ${extra}>${glyph?icon(glyph):''}${html(tr(text))}</button>`;}
 function empty(text,glyph='activity'){return `<div class="empty">${square(glyph)}<p>${html(text)}</p></div>`;}
 function active(){return (snapshot?.nodes||[]).find(n=>n.id===snapshot.node);}
+function nodeCaption(){
+  if(snapshot.online&&snapshot.runningNodeName)return snapshot.runningNodeName+' · '+snapshot.engine;
+  const node=active();
+  return node?node.name+' · '+(snapshot.engine||node.engine):tr('未选择节点');
+}
 function diagnosticRoute(){return route==='reach'||route==='ip';}
 const reduceMotion=matchMedia('(prefers-reduced-motion: reduce)');
-const navDuration=175;
-let glassMotion,glassTarget;
-function nav(animate=false){
-  if(!$('#nav-glass')){
-    const item=(k,sub=false)=>`<button type="button" class="nav-link${sub?' sub-link':''}" data-route="${k}">${sub?'':icon(glyphs[k])}<span>${labels[k]}</span></button>`;
-    $('#nav').innerHTML=`<div class="nav-stage"><div class="nav-glass-layer" aria-hidden="true"><div id="nav-glass"></div></div>`+['home','sources','nodes','connections'].map(k=>item(k)).join('')+`<div id="nav-group" class="nav-group"><button class="nav-link nav-parent" id="checks-toggle" type="button" data-act="checks-toggle" aria-label="检测" aria-controls="checks-subnav">${icon('scan')}<span>检测</span>${icon('chevron','nav-chevron')}</button><div class="subnav" id="checks-subnav"><div class="subnav-inner">${item('reach',true)}${item('ip',true)}</div></div></div>`+item('settings')+'</div>';
-    const observer=new ResizeObserver(()=>positionGlass());
-    observer.observe($('.nav-stage'));observer.observe($('#nav-group'));
-    reduceMotion.addEventListener('change',()=>{glassMotion?.cancel();positionGlass();});
+
+
+function nav(){
+  if(!$('#nav .nav-stage')){
+    const item=(k,sub=false)=>`<button type="button" class="nav-link${sub?' sub-link':''}" data-route="${k}">${icon(glyphs[k])}<span>${labels[k]}</span></button>`;
+    $('#nav').innerHTML=`<div class="nav-stage">`+['home','sources','nodes','connections'].map(k=>item(k)).join('')+`<div id="nav-group" class="nav-group"><button class="nav-link nav-parent" id="checks-toggle" type="button" data-act="checks-toggle" aria-label="检测" aria-controls="checks-subnav">${icon('scan')}<span>检测</span>${icon('chevron','nav-chevron')}</button><div class="subnav" id="checks-subnav"><div class="subnav-inner">${item('reach',true)}${item('ip',true)}</div></div></div>`+item('settings')+'</div>';
   }
   all('[data-route]',$('#nav')).forEach(link=>{
     $('span',link).textContent=tr(labels[link.dataset.route]);
     if(link.dataset.route===route)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
   });
   $('#checks-toggle span').textContent=tr('检测');$('#checks-toggle').setAttribute('aria-label',tr('检测'));
-  paintNav(animate);
+  paintNav();
 }
-function paintNav(animate=false){
+function paintNav(){
   const group=$('#nav-group'), toggle=$('#checks-toggle');
   const collapseActive=diagnosticRoute()&&!checksOpen;
   group.classList.toggle('nav-group-open',checksOpen);
@@ -112,34 +127,6 @@ function paintNav(animate=false){
   toggle.setAttribute('aria-expanded',String(checksOpen));
   if(collapseActive)toggle.setAttribute('aria-current','page');else toggle.removeAttribute('aria-current');
   $('#checks-subnav').inert=!checksOpen;
-  positionGlass(animate);
-}
-function positionGlass(animate=false){
-  const glass=$('#nav-glass'), stage=glass.closest('.nav-stage');
-  const item=diagnosticRoute()&&!checksOpen?$('#checks-toggle'):$(`[data-route="${route}"]`,stage);
-  const box=item.getBoundingClientRect(), origin=stage.getBoundingClientRect();
-  const target={x:box.left-origin.left+1,y:box.top-origin.top+1,w:box.width-2,h:box.height-2};
-  if(target.w<=0||target.h<=0||glassTarget&&Object.keys(target).every(k=>Math.abs(target[k]-glassTarget[k])<.25))return;
-  const from=glassTarget?glass.getBoundingClientRect():null;
-  glassMotion?.cancel();glassTarget=target;
-  glass.style.width=`${target.w}px`;glass.style.height=`${target.h}px`;
-  const frame=(x,y,sx=1,sy=1)=>`translate(${x}px,${y}px) scale(${sx},${sy})`;
-  glass.style.transform=frame(target.x,target.y);glass.dataset.ready='yes';
-  if(!animate||!from||reduceMotion.matches)return;
-  const dx=from.left-origin.left+from.width/2-target.x-target.w/2;
-  const dy=from.top-origin.top+from.height/2-target.y-target.h/2;
-  const distance=Math.hypot(dx,dy);if(distance<2)return;
-  const stretch=Math.min(.30,.12+distance/900);
-  const alongX=Math.abs(dx)/distance, alongY=Math.abs(dy)/distance;
-  const sx=alongX*stretch-alongY*.045, sy=alongY*stretch-alongX*.045;
-  const step=(offset,p,x,y,easing)=>({offset,transform:frame(target.x+dx*p,target.y+dy*p,x,y),easing});
-  const rebound=Math.min(.11,11/distance);
-  glassMotion=glass.animate([
-    step(0,1,from.width/target.w,from.height/target.h,'cubic-bezier(.26,.12,.47,.86)'),
-    step(.36,.39,1+sx,1+sy,'cubic-bezier(.15,.45,.35,1)'),
-    step(.72,-rebound,1-sx*.22,1-sy*.22,'ease-out'),
-    step(1,0,1,1,'linear'),
-  ],{duration:navDuration});
 }
 const pointer=$('#pointer-glow'), precisePointer=matchMedia('(hover: hover) and (pointer: fine)');
 let pointerFrame=0,pointerX=0,pointerY=0;
@@ -167,8 +154,16 @@ function sources(){
       ${button('','source-menu',`aria-label="${language==='en'?'Manage':'管理'} ${name}" aria-haspopup="menu" aria-expanded="false" aria-controls="source-menu" data-id="${id}"`,false,'more','icon-only source-menu-trigger')}</div>
       <div class="source-overview"><p class="source-meta">${s.count} 个节点${s.skipped?` · 跳过 ${s.skipped} 条`:''}</p>${badge(s.format,'muted')}</div>
       ${sourceQuota(s)}
+      ${s.refreshable?refreshStatus(s):''}
       <div class="source-state"><span data-source-current hidden>${icon('check')}当前订阅</span><span data-source-available>点击使用</span></div></section>`;
   }).join('')}</div>`:`<section class="card enter">${empty('还没有订阅','archive')}</section>`);
+}
+function refreshStatus(source){
+  const hours=source.refreshHours;
+  const next=source.nextRefresh?new Date(source.nextRefresh):null;
+  const time=next?.getTime()>0?new Intl.DateTimeFormat(language,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(next):'—';
+  const label=hours?(language==='en'?`Auto-update: every ${hours} h · Next: ${time}`:`自动更新：每 ${hours} 小时 · 下次 ${time}`):tr('自动更新：关闭');
+  return `<p class="quota-note" data-verbatim>${html(label)}${source.autoRefreshFailed?' · '+html(tr('上次自动更新失败')):''}</p>`;
 }
 function sourceQuota(s){
   if(!s.quota)return s.refreshable?'<p class="quota-note">暂无套餐流量 · 可尝试更新</p>':'';
@@ -278,7 +273,7 @@ async function changeDomainRule(args){
   let saved=false;
   try{
     if(polling)await polling;
-    snapshot=await nativeCall('domain-route',args);
+    takeSnapshot(await nativeCall('domain-route',args));
     reach.clear();ip=null;
     saved=true;
   }catch(e){error.textContent=tr(e.message);error.hidden=false;}
@@ -328,8 +323,8 @@ function settings(){
     <div class="core-grid">${(snapshot?.cores||[]).map(c=>`<div class="row core-row">${square('chip')}<div class="row-main"><strong>${html(c.id)}</strong><small data-bundled="${!!c.version}">${html(c.version||'文件缺失，请重新安装或完整解压')}</small></div></div>`).join('')}</div>
   </section>`;
 }
-function render(animateNav=false){nav(animateNav);page.innerHTML=`<div class="page-view">${({home,sources,nodes,connections,reach:reachable,ip:ipPage,settings}[route])()}</div>`;if(language==='en')localize(page);if($('#sort'))$('#sort').value=order;paint();}
-function navigate(next){if(next===route)return;route=next;if(diagnosticRoute())checksOpen=true;menuClose();render(true);$('h1',page)?.focus({preventScroll:true});window.scrollTo(0,0);}
+function render(){nav();page.innerHTML=`<div class="page-view">${({home,sources,nodes,connections,reach:reachable,ip:ipPage,settings}[route])()}</div>`;if(language==='en')localize(page);if($('#sort'))$('#sort').value=order;paint();}
+function navigate(next){if(next===route)return;route=next;if(diagnosticRoute())checksOpen=true;menuClose();render();$('h1',page)?.focus({preventScroll:true});window.scrollTo(0,0);}
 function paint(){
   paintUpdate();
   if(!snapshot)return;
@@ -342,7 +337,7 @@ function paint(){
     if($('#session').dataset.status!==status)$('#session').dataset.status=status;
     $('#session-title').textContent=tr(statusText);
     $('#power').setAttribute('aria-busy',String(starting||switching||working==='stop'));
-    $('#session-node').textContent=active()?active().name+' · '+(snapshot.engine||active().engine):tr('未选择节点');$('#session-warning').textContent=tr(snapshot.warning||(mode==='tun'&&!online?'TUN 为实验功能；仅支持 Mihomo，需以管理员身份启动客户端，并使用官方固定版核心。':active()&&!active().ready?'内置内核文件缺失，请重新安装或完整解压流枢。':''));
+    $('#session-node').textContent=nodeCaption();$('#session-warning').textContent=tr(snapshot.warning||(mode==='tun'&&!online?'TUN 为实验功能；仅支持 Mihomo，需以管理员身份启动客户端，并使用官方固定版核心。':!online&&active()&&!active().ready?'内置内核文件缺失，请重新安装或完整解压流枢。':''));
     const local=$('#local-proxy'), port=online&&Number.isInteger(snapshot.port)&&snapshot.port>=1&&snapshot.port<=65535?snapshot.port:null;
     local.hidden=!port;
     if(port){const address=`127.0.0.1:${port}`;$('span',local).textContent=address;local.setAttribute('aria-label',tr(`复制本机代理地址 ${address}`));}
@@ -374,7 +369,7 @@ function paint(){
   if(route==='connections')paintConnections();
   if($('#check-action')){
     $('#check-action').disabled=!online||!!pending;
-    $('#check-context').textContent=online&&active()?active().name+' · '+(snapshot.engine||active().engine):tr('请先在首页启动代理');
+    $('#check-context').textContent=online?nodeCaption():tr('请先在首页启动代理');
   }
 }
 function paintNodes(){
@@ -477,7 +472,7 @@ function menuOpen(id,x,y){
   const trigger=all('.source-menu-trigger').find(b=>b.dataset.id===id);
   trigger?.setAttribute('aria-expanded','true');
   const item=(text,act,glyph,extra='')=>button(text,act,'role="menuitem" '+extra,false,glyph,'menu-item');
-  menu.innerHTML=item('更新','refresh','refresh',source.refreshable?'':'disabled')+item('编辑名称','rename','edit')+item('替换订阅链接','replace-url','link')+
+  menu.innerHTML=item('更新','refresh','refresh',source.refreshable?'':'disabled')+(source.refreshable?item('自动更新间隔','refresh-interval','activity'):'')+item('编辑名称','rename','edit')+item('替换订阅链接','replace-url','link')+
     (source.yaml?item('导出 YAML','source-export','file')+item('编辑节点 YAML','source-edit','edit')+item('本地覆写','source-patch','settings'):'')+item('移除','remove','trash');
   menu.hidden=false;menu.style.left=Math.max(4,Math.min(x,innerWidth-menu.offsetWidth-4))+'px';menu.style.top=Math.max(4,Math.min(y,innerHeight-menu.offsetHeight-4))+'px';
   $('.menu-item:not(:disabled)',menu)?.focus({preventScroll:true});
@@ -529,7 +524,7 @@ async function saveConfig(){
   pending++;text.readOnly=true;save.disabled=true;status.hidden=true;
   try{
     if(polling)await polling;
-    snapshot=await nativeCall(patch?'source-override-save':'source-yaml-save',{id,body:text.value});
+    takeSnapshot(await nativeCall(patch?'source-override-save':'source-yaml-save',{id,body:text.value}));
     render();configDialog.close();toast(patch?'已保存覆写':'已保存本地副本');
   }catch(e){status.textContent=tr(e.message);status.hidden=false;}
   finally{pending--;text.readOnly=false;save.disabled=false;paint();}
@@ -548,12 +543,14 @@ async function mutate(a,args={},visual=true){
     if(polling)await polling;
     const result=await nativeCall(a,args,testing?delayProgress:a==='import-file'?()=>{importReading=true;paint();}:undefined);
     if(importing&&result?.traffic)toast('订阅已导入');
+    if(a==='refresh'&&result?.traffic&&!snapshot.online)toast('订阅已更新');
+    if(a==='refresh-interval'&&result?.traffic)toast('已保存自动更新间隔');
     if(testing){
       const count=latencyRun.ids?.size||0,total=snapshot.nodes.length;
       if(count>0)toast(count<total?`本轮完成 ${count} / ${total} 个节点测速`:`已完成 ${count} 个节点测速`);
       latencyRun=null;
     }
-    if(result?.traffic){const changed=result.node!==snapshot?.node||result.online!==snapshot?.online||result.source!==snapshot?.source;snapshot=result;if(changed){reach.clear();ip=null;}if(visual||(a==='select-source'&&(route==='nodes'||diagnosticRoute())))render();else{paint();if(testing&&route==='nodes'&&order==='delay')reorderNodeRows();}}
+    if(result?.traffic){const changed=result.node!==snapshot?.node||result.online!==snapshot?.online||result.source!==snapshot?.source;takeSnapshot(result);if(changed){reach.clear();ip=null;}if(visual||(a==='select-source'&&(route==='nodes'||diagnosticRoute())))render();else{paint();if(testing&&route==='nodes'&&order==='delay')reorderNodeRows();}}
     return result;
   }catch(e){
     if(sourceOperation)sourceError=e.message;
@@ -584,7 +581,7 @@ document.addEventListener('keydown',e=>{
   const columns=$('.connection-columns[open]');
   if(columns&&!document.querySelector('dialog[open]')){columns.open=false;$('summary',columns).focus();return;}
   if(menuId){const trigger=all('.source-menu-trigger').find(b=>b.dataset.id===menuId);menuClose();trigger?.focus();}
-  else if(checksOpen&&e.target.closest('#nav-group')){checksOpen=false;paintNav(true);$('#checks-toggle').focus();}
+  else if(checksOpen&&e.target.closest('#nav-group')){checksOpen=false;paintNav();$('#checks-toggle').focus();}
 });
 document.addEventListener('click', async e=>{
   const columns=$('.connection-columns[open]');
@@ -594,7 +591,7 @@ document.addEventListener('click', async e=>{
   const b=e.target.closest('[data-act]');const id=b?.dataset.id||menuId;
   if(b?.dataset.act!=='source-menu')menuClose();if(!b||b.disabled)return;
   const a=b.dataset.act;
-  if(a==='checks-toggle'){checksOpen=!checksOpen;paintNav(true);return;}
+  if(a==='checks-toggle'){checksOpen=!checksOpen;paintNav();return;}
   if(a==='power')return mutate(snapshot.online?'stop':'start',{mode},false);
   if(a==='copy-proxy'){
     const address=await mutate(a,{},false);
@@ -609,9 +606,10 @@ document.addEventListener('click', async e=>{
   if(a==='remove'){if(confirm(tr('移除此订阅及其节点？')))await mutate(a,{id});return;}
   if(a==='dismiss-source-error'){sourceError='';paint();return;}
   if(a==='source-menu'){const box=b.getBoundingClientRect();menuOpen(id,box.left,box.bottom);return;}
-  if(a==='select-node')return mutate(a,{id},false);
+  if(a==='select-node')return mutate(a,{id,source:snapshot.source,revision:snapshot.nodeRevision},false);
   if(a==='select-source'){if(id!==snapshot?.source)return mutate(a,{id},false);return;}
   if(a==='refresh')return mutate(a,{id});
+  if(a==='refresh-interval')return edit('自动更新间隔','间隔（小时，1–720；填 0 关闭）',String(snapshot.sources.find(s=>s.id===id)?.refreshHours||0),value=>mutate(a,{id,value}));
   if(a==='delay')return mutate(a,{},false);
   if(a==='connection-close')return mutate(a,{id},false);
   if(a==='domain-rules'){paintDomainRules();domainForm();domainDialog.showModal();return;}
@@ -694,9 +692,9 @@ document.addEventListener('submit',e=>{
 });
 async function poll(){
   if(!pending){polling=nativeCall('snapshot').then(s=>{
-    const previous=snapshot;snapshot=s;document.body.dataset.ready='yes';
+    const previous=snapshot;takeSnapshot(s);document.body.dataset.ready='yes';
     if(previous&&(previous.online!==s.online||previous.node!==s.node||previous.engine!==s.engine)){reach.clear();ip=null;if(['reach','ip'].includes(route))render();}
-    if(!previous||(route==='settings'&&previous.online!==s.online))render();else paint();
+    if(!previous||(route==='settings'&&previous.online!==s.online)||(route==='sources'&&previous.subscriptionRevision!==s.subscriptionRevision)||(route==='nodes'&&previous.nodeRevision!==s.nodeRevision)){menuClose();render();}else paint();
     if(!update.started){update.started=true;void checkUpdate(true);}
   }).catch(e=>{if(!snapshot)toast(e.message);});await polling;polling=null;}
   setTimeout(poll,1000);

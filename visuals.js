@@ -5,6 +5,7 @@ const icons = {
   network:'<rect x="9" y="2.5" width="6" height="6" rx="1.5"/><rect x="2.5" y="15.5" width="6" height="6" rx="1.5"/><rect x="15.5" y="15.5" width="6" height="6" rx="1.5"/><path d="M12 9v3M5.5 15.5V12h13v3.5"/>',
   archive:'<rect x="4" y="4" width="16" height="4" rx="1"/><path d="M6 8v11a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V8m-8 4h4"/>',
   activity:'<path d="M3 12h4l3-7 4 14 3-7h4"/>',
+  globe:'<circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/>',
   settings:'<path d="M12 2.5v3m0 13v3M5.3 5.3l2.1 2.1m9.2 9.2 2.1 2.1M2.5 12h3m13 0h3M5.3 18.7l2.1-2.1m9.2-9.2 2.1-2.1"/><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2.4"/>',
   layers:'<path d="m12 3 9 4.5-9 4.5L3 7.5 12 3zM3 12l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5"/>',
   plus:'<path d="M12 5v14M5 12h14"/>', right:'<path d="m9 6 6 6-6 6"/>', power:'<path d="M12 3v9m4.8-6.5a8 8 0 1 1-9.6 0"/>',
