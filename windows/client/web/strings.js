@@ -66,6 +66,10 @@ IP 纯净度检测|IP Check
 更新|Update
 编辑名称|Rename
 替换订阅链接|Replace URL
+复制订阅链接|Copy subscription URL
+已复制订阅链接|Subscription URL copied
+此订阅没有可复制的链接。|This subscription has no URL to copy.
+剪贴板正忙，请稍后重试。|The clipboard is busy. Try again.
 移除|Remove
 导出 YAML|Export YAML
 编辑节点 YAML|Edit node YAML
@@ -203,6 +207,8 @@ IP 地址|IP address
 已保存延迟检测地址|Latency test URL saved
 本机代理端口|Local proxy port
 停止代理后可修改|Stop the proxy to change this
+已从上一次保存的备份恢复订阅。无法读取的原文件已保留。|Subscriptions were restored from the previous save. The unreadable original was kept.
+旧订阅库已保留，请重新导入订阅。|The old library was kept. Import your subscriptions again.
 已保存本机代理端口|Local proxy port saved
 请先停止代理，再修改本机代理端口。|Stop the proxy before changing its local port.
 请输入 1–65535 之间的整数端口。|Enter a whole-number port from 1 to 65535.

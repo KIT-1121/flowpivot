@@ -65,6 +65,11 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
           window.clipboard.push(address);
           queueMicrotask(()=>reply({data:{id,ok:true,body:address}}));return;
         }
+        if(action==='copy-source-url'){
+          window.copySource={...args};
+          const fail=window.copySourceFails;
+          queueMicrotask(()=>reply({data:{id,ok:!fail,body:fail?'剪贴板正忙，请稍后重试。':true}}));return;
+        }
         if(action==='delay'){
           window.usedDelay={saved:state.delayUrl,args};
           window.measure={
@@ -238,6 +243,14 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await page.emulateMedia({reducedMotion:'no-preference'});
     await go('sources');const cardFoot=await page.locator('.source-state').first().boundingBox();
     assert.ok(cardFoot);await page.mouse.click(cardFoot.x+cardFoot.width/2,cardFoot.y+cardFoot.height/2,{button:'right'});
+    await page.getByRole('menuitem',{name:'复制订阅链接'}).click();
+    await page.locator('#toast.show').filter({hasText:'已复制订阅链接'}).waitFor();
+    assert.deepEqual(await page.evaluate(()=>window.copySource),{id:'a'});
+    await page.locator('[data-source=a] .source-menu-trigger').click();
+    await page.evaluate(()=>{window.copySourceFails=true;});
+    await page.getByRole('menuitem',{name:'复制订阅链接'}).click();
+    await page.locator('#toast.show').filter({hasText:'剪贴板正忙，请稍后重试。'}).waitFor();
+    await page.locator('[data-source=a] .source-menu-trigger').click();
     await page.getByRole('menuitem',{name:'替换订阅链接'}).waitFor();
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#source-menu').isHidden(),true);
@@ -713,6 +726,9 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await page.waitForFunction(()=>!!window.importFixture);
     await page.evaluate(()=>window.importFixture.finish());
     await page.locator('[data-source=test0].source-active').waitFor();
+    await page.locator('[data-source=test0] .source-menu-trigger').click();
+    assert.equal(await page.getByRole('menuitem',{name:'复制订阅链接'}).count(),0,'a file import has no URL action');
+    await page.keyboard.press('Escape');
     await go('nodes');
     await page.getByText('测试节点',{exact:true}).waitFor();
     assert.equal(await page.locator('[data-id=one]').getAttribute('aria-pressed'),'true');

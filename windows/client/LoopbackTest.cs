@@ -63,12 +63,11 @@ internal static class LoopbackTest {
       rejected=false;try{Call(service,"refresh",Args("id",id));}catch(InvalidOperationException){rejected=true;}
       Assert(rejected&&request()=="hello","invalid refreshed content preserves forwarding");
       body="proxies:\n"+two;
-      var blockedWrite=Path.Combine(root,"subscriptions.dat.tmp");
-      Directory.CreateDirectory(blockedWrite);
       rejected=false;
-      try{Call(service,"refresh",Args("id",id));}
-      catch(UnauthorizedAccessException){rejected=true;}
-      finally{Directory.Delete(blockedWrite);}
+      using(var locked=new FileStream(Path.Combine(root,"subscriptions.dat"),FileMode.Open,FileAccess.Read,FileShare.Read)){
+        try{Call(service,"refresh",Args("id",id));}
+        catch(IOException){rejected=true;}
+      }
       s=Call(service,"snapshot",Args());
       Assert(rejected&&request()=="hello"&&LocalData.Number(s,revision)==0&&LocalData.Text(s,"runningNodeName")=="Renamed","failed persistence retains the old node, forwarding and disconnect revision");
       body=original;
@@ -231,7 +230,131 @@ internal static class LoopbackTest {
     }catch(WebException e){Assert(failures==1&&e.Status==WebExceptionStatus.TrustFailure,"certificate failure does not retry");return 0;}
     throw new Exception("Expected a certificate failure");
   }
+  private static int StoreRecovery(string root){
+    Directory.CreateDirectory(root);
+    string path=Path.Combine(root,"subscriptions.dat"), backup=path+".bak";
+    var store=new SubscriptionStore(root);
+    var damage=new byte[]{1,2,3,4};
+    var model=new ClientModel{Sources=new List<SourceRecord>{
+      new SourceRecord{Id="one",Name="Fixture",Body="proxies:\n  - {name: Fixture, type: http, server: 127.0.0.1, port: 18080}"}},Source="one",Node="FP-001",LocalProxyPort=17899};
+    var parsed=new Dictionary<string,ParsedSource>();
+    bool restored;
+    Assert(store.Load(parsed,false,out restored).Sources.Count==0&&!restored&&!File.Exists(path),"empty first launch does not create or reset files");
+    LocalData.Write(path,LocalData.Json.Serialize(model)); // alpha.22 file format
+    Assert(store.Load(parsed,false,out restored).LocalProxyPort==17899&&!restored&&parsed.Count==1,"legacy encrypted profile loads unchanged");
+    Assert(!store.PreserveAndReset()&&File.Exists(path)&&!File.Exists(backup),"reset refuses a readable profile");
+    using(var locked=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.None)){
+      var unlocked=Task.Run(()=>{Thread.Sleep(450);locked.Dispose();});
+      Assert(store.Load(new Dictionary<string,ParsedSource>(),true,out restored).LocalProxyPort==17899&&!restored,"boot retries a temporarily locked file without resetting it");
+      unlocked.Wait();
+    }
+    var before=File.ReadAllBytes(path);
+    model.LocalProxyPort=17901;store.Write(model);
+    Assert(File.ReadAllBytes(backup).SequenceEqual(before)&&LocalData.Read(path).Contains("17901"),"atomic save retains the preceding encrypted file");
+    File.WriteAllBytes(path,damage);
+    parsed.Clear();
+    Assert(store.Load(parsed,false,out restored).LocalProxyPort==17899&&restored&&parsed.Count==1,"valid encrypted backup restores settings and subscriptions");
+    Assert(File.ReadAllBytes(path).SequenceEqual(before)&&File.ReadAllBytes(backup).SequenceEqual(before)&&
+      Directory.GetFiles(root,"subscriptions.dat.recovery-*").Select(File.ReadAllBytes).Any(b=>b.SequenceEqual(damage)),"backup remains valid and the unreadable original is archived byte for byte");
+    var invalid=LocalData.Encrypt("{\"Sources\":null}");
+    File.WriteAllBytes(backup,invalid);
+    File.WriteAllBytes(path,damage);
+    bool refused=false;
+    try{store.Load(new Dictionary<string,ParsedSource>(),false,out restored);}catch(SubscriptionStoreException){refused=true;}
+    Assert(refused&&File.ReadAllBytes(path).SequenceEqual(damage)&&File.ReadAllBytes(backup).SequenceEqual(invalid),"unreadable files do not silently reset, including an invalid decrypted backup");
+    using(var locked=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read)){
+      refused=false;
+      try{store.PreserveAndReset();}catch(IOException){refused=true;}
+      Assert(refused&&File.ReadAllBytes(path).SequenceEqual(damage),"failed reset leaves the original intact");
+    }
+    Assert(store.PreserveAndReset(),"confirmed reset can initialize a new encrypted library");
+    Assert(store.Load(new Dictionary<string,ParsedSource>(),false,out restored).Sources.Count==0&&!restored&&
+      Directory.GetFiles(root,"subscriptions.dat.recovery-*").Select(File.ReadAllBytes).Any(b=>b.SequenceEqual(invalid))&&
+      File.ReadAllBytes(backup).SequenceEqual(invalid),"confirmed reset archives both originals and fresh profile reopens");
+    store.Write(model);
+    using(var reopened=new ClientService(root,false)){
+      Assert(LocalData.Rows(Call(reopened,"snapshot",Args()),"sources").Count()==1,"store remains usable across app restarts after reimport");
+    }
+    File.Delete(path);
+    Assert(store.Load(new Dictionary<string,ParsedSource>(),false,out restored).Sources.Count==0&&restored&&File.Exists(path),"missing primary recovers from the previous save");
+    Assert(!Directory.GetFiles(root,"subscriptions.dat.*.tmp").Any(),"recovery leaves no temporary writes");
+    return 0;
+  }
+  private static int NodeMemory(string root){
+    string first="  - {name: One, type: http, server: 127.0.0.1, port: 18080}\n";
+    string second="  - {name: Two, type: http, server: 127.0.0.1, port: 18081}\n";
+    string body="proxies:\n"+first+second;
+    Func<string,IWebProxy,string,SubscriptionResult> download=(url,proxy,patch)=>new SubscriptionResult{Body=body,Data=Subscription.WithOverride(body,patch)};
+    string a,b;
+    using(var service=new ClientService(root,false,downloader:download)){
+      var s=Call(service,"import",Args("input","https://a.invalid/sub","name","A"));
+      a=LocalData.Text(LocalData.Rows(s,"sources").Single(),"id");
+      s=Call(service,"import",Args("input","https://b.invalid/sub","name","B"));
+      b=LocalData.Text(LocalData.Rows(s,"sources").Last(),"id");
+      Call(service,"select-node",Args("id","FP-002"));
+      s=Call(service,"select-source",Args("id",b));
+      Assert(LocalData.Text(s,"node")=="FP-001","a never-selected subscription starts with its default node");
+      Call(service,"select-node",Args("id","FP-002"));
+      s=Call(service,"select-source",Args("id",a));
+      Assert(LocalData.Text(s,"node")=="FP-002","switching back remembers the previous node of subscription A");
+      body="proxies:\n"+second+first;
+      s=Call(service,"refresh",Args("id",b));
+      Assert(LocalData.Text(s,"node")=="FP-002","refreshing subscription B does not alter selection in A");
+      s=Call(service,"select-source",Args("id",b));
+      Assert(LocalData.Text(s,"node")=="FP-001"&&LocalData.Text(LocalData.Rows(s,"nodes").First(),"name")=="Two","inactive refresh remaps the recorded endpoint despite changed positional IDs");
+    }
+    using(var service=new ClientService(root,false,downloader:download)){
+      var s=Call(service,"snapshot",Args());
+      Assert(LocalData.Text(s,"source")==b&&LocalData.Text(s,"node")=="FP-001","active node and subscription survive restart");
+      s=Call(service,"select-source",Args("id",a));
+      Assert(LocalData.Text(s,"node")=="FP-002","inactive selection survives restart as well");
+      body="proxies:\n"+first;
+      Call(service,"refresh",Args("id",b));
+      s=Call(service,"select-source",Args("id",b));
+      Assert(LocalData.Text(s,"node")=="FP-001"&&LocalData.Text(LocalData.Rows(s,"nodes").Single(),"name")=="One","removed remembered node falls back to a valid default");
+    }
+    var legacyRoot=Path.Combine(root,"legacy");
+    Directory.CreateDirectory(legacyRoot);
+    LocalData.Write(Path.Combine(legacyRoot,"subscriptions.dat"),LocalData.Json.Serialize(new ClientModel{Source="a",Node="FP-002",
+      Sources=new List<SourceRecord>{
+        new SourceRecord{Id="a",Name="A",Body="proxies:\n"+first+second},
+        new SourceRecord{Id="b",Name="B",Body="proxies:\n"+first+second}
+      }}));
+    using(var legacy=new ClientService(legacyRoot,false)){
+      Call(legacy,"select-source",Args("id","b"));
+      Assert(LocalData.Text(Call(legacy,"select-source",Args("id","a")),"node")=="FP-002","upgrade keeps the last active selection from a legacy profile");
+    }
+    return 0;
+  }
   private static int Test(string[] a) {
+    if(a.Length==2&&a[0]=="--copy-source-url"){
+      const string uri="https://fixture.invalid/sub?example=%2B%2F%3D&kind=sample";
+      const string updated="https://fixture.invalid/updated?example=a%26b";
+      const string yaml="proxies:\n  - {name: Fixture, type: http, server: 127.0.0.1, port: 18080}";
+      int requests=0;
+      using(var s=new ClientService(a[1],false,downloader:(url,proxy,patch)=>{
+        requests++;return new SubscriptionResult{Body=yaml,Data=Subscription.Parse(yaml)};
+      })){
+        var state=Call(s,"import",Args("input",uri));
+        string remote=LocalData.Text(LocalData.Rows(state,"sources").Single(),"id");
+        state=Call(s,"import",Args("input",yaml,"origin","file"));
+        string file=LocalData.Text(LocalData.Rows(state,"sources").Last(),"id");
+        Assert(s.SubscriptionUrl(remote)==uri&&requests==1,"retrieve the exact URL including encoded query without downloading again");
+        bool rejected=false;
+        try{s.SubscriptionUrl(file);}catch(InvalidOperationException){rejected=true;}
+        Assert(rejected,"local subscription file cannot be copied as a link");
+        state=Call(s,"replace-url",Args("id",remote,"url",updated));
+        Assert(s.SubscriptionUrl(remote)==updated&&requests==2,"copy retrieves the saved replacement URL");
+        var serialized=LocalData.Json.Serialize(state);
+        var logs=LocalData.Json.Serialize(s.Run("logs-read",Args()));
+        Assert(!serialized.Contains("fixture.invalid")&&!logs.Contains("fixture.invalid"),"snapshot and logs do not disclose the subscription URL");
+        using(var reopened=new ClientService(a[1],false))
+          Assert(reopened.SubscriptionUrl(remote)==updated,"copy uses the persisted URL after restart");
+      }
+      return 0;
+    }
+    if(a.Length==2&&a[0]=="--store-recovery")return StoreRecovery(a[1]);
+    if(a.Length==2&&a[0]=="--node-memory")return NodeMemory(a[1]);
     if(a.Length==1&&a[0]=="--updates")return Updates();
     if(a.Length==1&&a[0]=="--subscription-responses")return SubscriptionResponses();
     if(a.Length==1&&a[0]=="--target-routes"){
@@ -429,13 +552,12 @@ internal static class LoopbackTest {
           var exact=Call(service,"domain-route",Args("operation","save","kind","exact","pattern","Example.Invalid.","value","proxy"));
           string exactId=LocalData.Text(LocalData.Rows(exact,"domainRoutes").Last(),"id");
           Assert(matchedRule("example.invalid")=="DomainRegex","the first match wins, even over a later exact rule");
-          Directory.CreateDirectory(saved+".tmp");
-          try{
+          using(var locked=new FileStream(saved,FileMode.Open,FileAccess.Read,FileShare.Read)){
             bool failed=false;
             try{Call(service,"domain-route",Args("operation","save","id",regexId,"kind","regex","pattern","nomatch","value","direct"));}
             catch(InvalidOperationException){failed=true;}
             Assert(failed&&matchedRule("example.invalid")=="DomainRegex","failed domain rule save restores running configuration");
-          }finally{Directory.Delete(saved+".tmp");}
+          }
           Call(service,"domain-route",Args("operation","delete","id",regexId));
           Assert(matchedRule("example.invalid")=="Domain","removing the first rule exposes the next match");
           Call(service,"domain-route",Args("operation","delete","id",exactId));
@@ -472,11 +594,10 @@ internal static class LoopbackTest {
             rejected=false;
             try{Call(service,"domain-route",Args("operation","save","kind","ip","pattern",target,"value","proxy"));}catch(InvalidOperationException){rejected=true;}
             Assert(rejected,"duplicate exact IP is rejected rather than adding a contradictory rule");
-            Directory.CreateDirectory(saved+".tmp");
-            try{
+            using(var locked=new FileStream(saved,FileMode.Open,FileAccess.Read,FileShare.Read)){
               bool failed=false;try{Call(service,"domain-route",Args("operation","save","id",ruleId,"kind","ip","pattern",target,"value","proxy"));}catch(InvalidOperationException){failed=true;}
               Assert(failed&&Subscription.Request(uri,proxy,30,out status,false)=="local","failed save restores the live direct route");
-            }finally{Directory.Delete(saved+".tmp");}
+            }
             Call(service,"domain-route",Args("operation","save","id",ruleId,"kind","ip","pattern",target,"value","proxy"));
             Assert(Subscription.Request(uri,proxy,30,out status,false)=="other","saving proxy restores real upstream traversal without changing node or port");
             Call(service,"domain-route",Args("operation","delete","id",ruleId));
@@ -486,15 +607,14 @@ internal static class LoopbackTest {
         }else Console.WriteLine("SKIP: no local non-loopback IPv4 address for real DIRECT fixture");
         // Block the atomic save without touching the existing profile. The core must
         // return to the last saved node, not leave the UI and routing out of sync.
-        Directory.CreateDirectory(saved+".tmp");
-        try{
+        using(var locked=new FileStream(saved,FileMode.Open,FileAccess.Read,FileShare.Read)){
           bool failed=false;
           try{Call(service,"select-node",Args("id","FP-001"));}catch(InvalidOperationException){failed=true;}
           s=Call(service,"snapshot",Args());
           Assert(failed&&Convert.ToBoolean(s["online"])&&LocalData.Text(s,"node")=="FP-002","failed switch save rolls the live selector back");
           response=Subscription.Request(new Uri("http://example.invalid/rollback"),new WebProxy("http://127.0.0.1:"+listening),30,out status,false);
           Assert(response=="other","rollback restores actual routing");
-        }finally{Directory.Delete(saved+".tmp");}
+        }
         Assert(!Convert.ToBoolean(Call(service,"stop",Args())["online"]),"stop");
         Assert(LocalData.Number(Call(service,"start",Args("mode","local")),"port")==fixedPort,"stop and start reuse the same port");
         Call(service,"stop",Args());

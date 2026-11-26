@@ -472,7 +472,8 @@ function menuOpen(id,x,y){
   const trigger=all('.source-menu-trigger').find(b=>b.dataset.id===id);
   trigger?.setAttribute('aria-expanded','true');
   const item=(text,act,glyph,extra='')=>button(text,act,'role="menuitem" '+extra,false,glyph,'menu-item');
-  menu.innerHTML=item('更新','refresh','refresh',source.refreshable?'':'disabled')+(source.refreshable?item('自动更新间隔','refresh-interval','activity'):'')+item('编辑名称','rename','edit')+item('替换订阅链接','replace-url','link')+
+  menu.innerHTML=item('更新','refresh','refresh',source.refreshable?'':'disabled')+(source.refreshable?item('自动更新间隔','refresh-interval','activity'):'')+item('编辑名称','rename','edit')+
+    (source.refreshable?item('复制订阅链接','copy-source-url','copy'):'')+item('替换订阅链接','replace-url','link')+
     (source.yaml?item('导出 YAML','source-export','file')+item('编辑节点 YAML','source-edit','edit')+item('本地覆写','source-patch','settings'):'')+item('移除','remove','trash');
   menu.hidden=false;menu.style.left=Math.max(4,Math.min(x,innerWidth-menu.offsetWidth-4))+'px';menu.style.top=Math.max(4,Math.min(y,innerHeight-menu.offsetHeight-4))+'px';
   $('.menu-item:not(:disabled)',menu)?.focus({preventScroll:true});
@@ -596,6 +597,10 @@ document.addEventListener('click', async e=>{
   if(a==='copy-proxy'){
     const address=await mutate(a,{},false);
     if(address)toast('已复制 '+address);
+    return;
+  }
+  if(a==='copy-source-url'){
+    if(await mutate(a,{id},false)===true)toast('已复制订阅链接');
     return;
   }
   if(a==='mode'){mode=b.dataset.mode;paint();return;}

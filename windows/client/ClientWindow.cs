@@ -54,7 +54,8 @@ internal sealed partial class ClientWindow : Form {
     private async Task Boot(){
         busy=true;
         try {
-            service=await Task.Run(()=>new ClientService(root,report==null));closeToTray=service.CloseToTray;
+            if(!await OpenSubscriptionLibrary()){busy=false;ExitApplication();return;}
+            closeToTray=service.CloseToTray;
             var env=await CoreWebView2Environment.CreateAsync(null,Path.Combine(root,"WebView2"));
             await view.EnsureCoreWebView2Async(env);var core=view.CoreWebView2;
             core.Settings.AreHostObjectsAllowed=false;core.Settings.AreDevToolsEnabled=false;
@@ -112,6 +113,47 @@ internal sealed partial class ClientWindow : Form {
             string message=e is WebView2RuntimeNotFoundException?"请先安装 Microsoft Edge WebView2 Runtime。":e is InvalidOperationException?e.Message:"流枢无法启动。请检查系统组件及本地配置读写权限。";
             if(report!=null)File.WriteAllText(report,"FAIL: "+e.GetType().Name+": "+message);else MessageBox.Show(this,message,Text,MessageBoxButtons.OK,MessageBoxIcon.Error);
             ExitApplication();
+        }
+    }
+    private async Task<bool> OpenSubscriptionLibrary(){
+        bool reset=false;
+        while(!closing&&!exitRequested){
+            string problem;
+            try{
+                service=await Task.Run(()=>new ClientService(root,report==null,resetStore:reset));
+                return !closing&&!exitRequested;
+            }catch(SubscriptionStoreException e){
+                if(report!=null)throw;
+                new DiagnosticsLog(root,null).Write("本地订阅库启动读取失败",e.InnerException);
+                problem=e.Message;
+            }catch(Exception e){
+                if(!reset||(!DiagnosticsLog.IsFileError(e)&&!(e is System.Security.Cryptography.CryptographicException)))throw;
+                new DiagnosticsLog(root,null).Write("无法保留旧订阅库并新建",e);
+                problem="暂时无法备份或新建订阅库。请检查当前 Windows 用户、磁盘空间和目录权限。";
+            }
+            if(closing||exitRequested)return false;
+            var choice=ChooseLibraryRecovery(problem);
+            if(choice==DialogResult.Cancel)return false;
+            reset=choice==DialogResult.Yes;
+            if(reset&&MessageBox.Show(this,"旧订阅库将保留在本地，不会删除。新订阅库为空，需要重新导入订阅；原有分流规则及其他库内设置也需要重新配置。\r\n\r\n确定继续吗？","保留旧库并新建",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)
+                reset=false;
+        }
+        return false;
+    }
+    private DialogResult ChooseLibraryRecovery(string problem){
+        using(var dialog=new Form{Text="订阅库恢复",StartPosition=FormStartPosition.CenterParent,FormBorderStyle=FormBorderStyle.FixedDialog,
+            MinimizeBox=false,MaximizeBox=false,ShowInTaskbar=false,AutoScaleMode=AutoScaleMode.Font,ClientSize=new Size(542,168)}){
+            var message=new Label{Dock=DockStyle.Fill,Padding=new Padding(18),Text=problem+
+                "\r\n\r\n建议先重试。如果仍无法读取，可保留旧库并新建，再重新导入订阅。"};
+            var actions=new FlowLayoutPanel{Dock=DockStyle.Bottom,Height=53,FlowDirection=FlowDirection.RightToLeft,Padding=new Padding(12,5,12,5)};
+            var exit=new Button{Text="退出",AutoSize=true,DialogResult=DialogResult.Cancel};
+            var fresh=new Button{Text="保留旧库并新建",AutoSize=true,DialogResult=DialogResult.Yes};
+            var retry=new Button{Text="重试",AutoSize=true,DialogResult=DialogResult.Retry,TabIndex=0};
+            actions.Controls.AddRange(new Control[]{exit,fresh,retry});
+            dialog.Controls.Add(message);dialog.Controls.Add(actions);
+            dialog.AcceptButton=retry;dialog.CancelButton=exit;dialog.ActiveControl=retry;
+            var result=dialog.ShowDialog(this);
+            return result==DialogResult.Retry||result==DialogResult.Yes?result:DialogResult.Cancel;
         }
     }
     private async Task TestCloseBehavior(CoreWebView2 core){
@@ -217,8 +259,14 @@ internal sealed partial class ClientWindow : Form {
             if(busy){Reply(id,false,"请等待当前操作完成。");return;}
             if(action=="copy-proxy"){
                 var address=service.LocalProxyAddress();
-                try{Clipboard.SetText(address);}catch(System.Runtime.InteropServices.ExternalException){throw new InvalidOperationException("剪贴板正忙，请稍后重试。");}
+                CopyText(address);
                 Reply(id,true,address);return;
+            }
+            if(action=="copy-source-url"){
+                // Subscription URLs may contain credentials. Keep them in the native
+                // host and clipboard only; the renderer receives an acknowledgement.
+                CopyText(service.SubscriptionUrl(LocalData.Text(args,"id")));
+                Reply(id,true,true);return;
             }
             busy=true;
             try{
@@ -267,6 +315,10 @@ internal sealed partial class ClientWindow : Form {
         }catch(Exception error){
             if(id>0)Reply(id,false,error is InvalidOperationException?error.Message:"操作未完成。请检查核心、网络或本地文件权限。");
         }
+    }
+    private static void CopyText(string text){
+        try{Clipboard.SetText(text,TextDataFormat.UnicodeText);}
+        catch(System.Runtime.InteropServices.ExternalException){throw new InvalidOperationException("剪贴板正忙，请稍后重试。");}
     }
     private async Task TestLogs(CoreWebView2 core){
         await core.ExecuteScriptAsync("document.querySelector('[data-route=settings]').click();document.querySelector('[data-act=logs-view]').click();");

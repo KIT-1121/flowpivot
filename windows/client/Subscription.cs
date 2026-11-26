@@ -27,7 +27,9 @@ internal static class LocalData
         File.WriteAllBytes(temp, ProtectedData.Protect(Encoding.UTF8.GetBytes(json),null,DataProtectionScope.CurrentUser));
         if (File.Exists(path)) File.Replace(temp,path,null); else File.Move(temp,path);
     }
-    internal static string Read(string path) { return Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(path),null,DataProtectionScope.CurrentUser)); }
+    internal static byte[] Encrypt(string json) {return ProtectedData.Protect(Encoding.UTF8.GetBytes(json),null,DataProtectionScope.CurrentUser);}
+    internal static string Decrypt(byte[] bytes) {return new UTF8Encoding(false,true).GetString(ProtectedData.Unprotect(bytes,null,DataProtectionScope.CurrentUser));}
+    internal static string Read(string path) { return Decrypt(File.ReadAllBytes(path)); }
 }
 
 internal sealed class SourceRecord
@@ -37,6 +39,7 @@ internal sealed class SourceRecord
     public string Url { get; set; }
     public string Body { get; set; }
     public string Override { get; set; }
+    public string LastNode { get; set; }
     public SubscriptionQuota Quota { get; set; }
     public int RefreshHours { get; set; }
     public long NextRefreshUtcTicks { get; set; }
