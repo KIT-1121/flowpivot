@@ -4,33 +4,10 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Security.Cryptography;
 using System.Text;
-using System.Web.Script.Serialization;
 using YamlDotNet.Core;
 using YamlDotNet.Core.Events;
 using YamlDotNet.RepresentationModel;
-
-internal static class LocalData
-{
-    internal static JavaScriptSerializer Json { get { return new JavaScriptSerializer { MaxJsonLength = 40000000, RecursionLimit = 48 }; } }
-    internal static string Text(IDictionary<string,object> d, string key) { object v; return d != null && d.TryGetValue(key,out v) ? v as string ?? "" : ""; }
-    internal static IDictionary<string,object> Obj(IDictionary<string,object> d, string key) { object v; return d != null && d.TryGetValue(key,out v) ? v as IDictionary<string,object> : null; }
-    internal static IEnumerable<IDictionary<string,object>> Rows(IDictionary<string,object> d, string key) {
-        object v; var a = d != null && d.TryGetValue(key,out v) ? v as object[] : null;
-        return a == null ? Enumerable.Empty<IDictionary<string,object>>() : a.OfType<IDictionary<string,object>>();
-    }
-    internal static long Number(IDictionary<string,object> d, string key) { object v; long n; return d != null && d.TryGetValue(key,out v) && long.TryParse(Convert.ToString(v,CultureInfo.InvariantCulture),out n) ? n : 0; }
-    internal static IDictionary<string,object> Parse(string json) { return Json.DeserializeObject(json) as IDictionary<string,object>; }
-    internal static void Write(string path, string json) {
-        string temp = path + ".tmp";
-        File.WriteAllBytes(temp, ProtectedData.Protect(Encoding.UTF8.GetBytes(json),null,DataProtectionScope.CurrentUser));
-        if (File.Exists(path)) File.Replace(temp,path,null); else File.Move(temp,path);
-    }
-    internal static byte[] Encrypt(string json) {return ProtectedData.Protect(Encoding.UTF8.GetBytes(json),null,DataProtectionScope.CurrentUser);}
-    internal static string Decrypt(byte[] bytes) {return new UTF8Encoding(false,true).GetString(ProtectedData.Unprotect(bytes,null,DataProtectionScope.CurrentUser));}
-    internal static string Read(string path) { return Decrypt(File.ReadAllBytes(path)); }
-}
 
 internal sealed class SourceRecord
 {
@@ -115,11 +92,11 @@ internal static class Subscription
             request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
             request.Timeout = Math.Max(1, timeout-(int)timer.ElapsedMilliseconds);
             request.ReadWriteTimeout = request.Timeout;
-            using (var deadline = new System.Threading.Timer(_ => request.Abort(),null,request.Timeout,System.Threading.Timeout.Infinite)) {
+using (var deadline = new System.Threading.Timer(_ => request.Abort(),null,request.Timeout,System.Threading.Timeout.Infinite)) {
                 HttpWebResponse response;
                 try { response = (HttpWebResponse)request.GetResponse(); }
                 catch(WebException e) { response = e.Response as HttpWebResponse; if (response == null) throw; }
-                using (response) {
+using (response) {
                     status = (int)response.StatusCode;
                     if(redirect && status >= 300 && status < 400 && response.Headers["Location"] != null) {
                         try {url=HttpUri(new Uri(url,response.Headers["Location"]).AbsoluteUri,true);}
@@ -136,7 +113,7 @@ internal static class Subscription
                         }
                         userInfo(extra);
                     }
-                    using (var body=response.GetResponseStream()) using(var data=new MemoryStream()) {
+using (var body=response.GetResponseStream()) using(var data=new MemoryStream()) {
                         var chunk=new byte[8192]; int n;
                         while ((n=body.Read(chunk,0,chunk.Length))>0) {
                             if (data.Length + n > cap) throw new InvalidOperationException("下载失败：响应超过大小限制。请索取精简的节点订阅。");

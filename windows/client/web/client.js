@@ -48,7 +48,7 @@ function address(v) {
   if(!String(v).trim())return null;
   try{const u=new URL(/^[a-z]+:\/\//i.test(v.trim())?v.trim():'https://'+v.trim());return /^https?:$/.test(u.protocol)&&!u.username&&!u.password?u.href:null;}catch{return null;}
 }
-let latencyRun=null, latencyError=null, importReading=false;
+let latencyRun=null, latencyError=null, importStage='';
 let update={checking:false,started:false,offer:null,text:"",promptAfterEditor:false};
 let sites=load('sites',[]); sites=Array.isArray(sites)?sites.map(address).filter(Boolean).slice(0,20):[];
 const connectionColumns={host:'目标',route:'走向',rule:'规则',network:'协议',up:'上传',down:'下载'};
@@ -324,7 +324,7 @@ function settings(){
   </section>`;
 }
 function render(){nav();page.innerHTML=`<div class="page-view">${({home,sources,nodes,connections,reach:reachable,ip:ipPage,settings}[route])()}</div>`;if(language==='en')localize(page);if($('#sort'))$('#sort').value=order;paint();}
-function navigate(next){if(next===route)return;route=next;if(diagnosticRoute())checksOpen=true;menuClose();render();$('h1',page)?.focus({preventScroll:true});window.scrollTo(0,0);}
+function navigate(next){if(next===route)return;route=next;page.classList.remove('source-drop-active');if(diagnosticRoute())checksOpen=true;menuClose();render();$('h1',page)?.focus({preventScroll:true});window.scrollTo(0,0);}
 function paint(){
   paintUpdate();
   if(!snapshot)return;
@@ -346,13 +346,13 @@ function paint(){
     all('[data-mode]').forEach(b=>{b.setAttribute('aria-pressed',b.dataset.mode===(online?snapshot.mode:mode));b.disabled=online||!!pending;});
   }
   if(route==='sources'){
-    const importing=working==='import'||working==='import-file', updating=working==='refresh'||working==='replace-url';
-    const status=$('.import-status',page), text=tr(updating?'正在更新订阅…':importing?(working==='import-file'&&!importReading?'请选择订阅文件…':'正在读取并识别订阅…'):'');
+    const importing=!!importStage, updating=working==='refresh'||working==='replace-url';
+    const status=$('.import-status',page), text=tr(importStage==='choosing'?'请选择订阅文件…':importStage==='saving'?'正在等待保存订阅…':importing?'正在读取并识别订阅…':updating?'正在更新订阅…':'');
     status.hidden=!importing&&!updating;
     if($('span',status).textContent!==text)$('span',status).textContent=text;
     const failure=$('.import-failure',page), detail=$('p',failure), error=tr(sourceError);
     failure.hidden=!error;if(detail.textContent!==error)detail.textContent=error;
-    all('[data-act=import],[data-act=import-file]',page).forEach(b=>{b.disabled=!!pending;b.setAttribute('aria-busy',String(importing));});
+    all('[data-act=import],[data-act=import-file]',page).forEach(b=>{b.disabled=importing;b.setAttribute('aria-busy',String(importing));});
   }
   if(route==='sources')all('[data-source]',page).forEach(card=>{
     const selected=card.dataset.source===snapshot.source;
@@ -374,10 +374,10 @@ function paint(){
 }
 function paintNodes(){
   const list=$('#node-list');if(!list)return;
-  const run=latencyRun?.source===snapshot.source?latencyRun:null;
-  const error=latencyError?.source===snapshot.source?latencyError:null;
+  const run=currentLatency(latencyRun)?latencyRun:null;
+  const error=currentLatency(latencyError)?latencyError:null;
   const progress=$('#latency-progress'),button=$('[data-act=delay]');
-  button.disabled=!!pending;
+  button.disabled=!!pending||!!latencyRun;
   $('.latency-action-icon .icon',button).toggleAttribute('hidden',!!run);
   button.setAttribute('aria-busy',String(!!run));
   $('.latency-spinner',button).hidden=!run;
@@ -424,6 +424,30 @@ function delayProgress(progress){
   if(Array.isArray(progress.ids)&&progress.ids.length)run.ids=new Set(progress.ids);
   else if(run.ids?.has(progress.id))run.results.set(progress.id,progress.delay);
   if(route==='nodes')paintNodes();
+}
+const currentLatency=run=>!!run&&run.source===snapshot?.source&&run.revision===(snapshot.nodeRevision??0);
+async function measureLatency(){
+  if(latencyRun||!snapshot?.source)return;
+  const run={source:snapshot.source,revision:snapshot.nodeRevision??0,total:snapshot.nodes.length,ids:null,results:new Map()};
+  latencyRun=run;latencyError=null;paint();
+  try{
+    const applied=await nativeCall('delay',{},delayProgress);
+    if(applied===true&&currentLatency(run)){
+      // Only merge latency values. The request cannot overwrite more recent
+      // proxy state or a new selected node.
+      for(const node of snapshot.nodes)if(run.results.has(node.id))node.delay=run.results.get(node.id);
+      const count=run.results.size;
+      if(count>0)toast(count<run.total?`本轮完成 ${count} / ${run.total} 个节点测速`:`已完成 ${count} 个节点测速`);
+    }
+  }catch(e){
+    if(currentLatency(run)){
+      latencyError={source:run.source,revision:run.revision,text:`测速未完成：${e.message}`,detail:e.message};
+      if(route!=='nodes')toast(e.message);
+    }
+  }finally{
+    latencyRun=null;paint();
+    if(route==='nodes'&&order==='delay')reorderNodeRows();
+  }
 }
 function paintUpdate(){
   const check=$('[data-act=app-check]'), offer=$('[data-act=app-offer]'), status=$('#app-update-status');
@@ -532,39 +556,75 @@ async function saveConfig(){
 }
 async function mutate(a,args={},visual=true){
   if(pending)return;
-  const testing=a==='delay', importing=a==='import'||a==='import-file';
-  const sourceOperation=importing||a==='refresh'||a==='replace-url';
+  const sourceOperation=a==='refresh'||a==='replace-url';
   if(sourceOperation)sourceError='';
-  if(importing)importReading=a==='import';
-  if(testing){latencyRun={source:snapshot.source,ids:null,results:new Map()};latencyError=null;}
   pending++;working=a;paint();
   const b=$(`[data-act="${a}"]`);
-  if(b&&!['select-node','select-source','delay'].includes(a))b.disabled=true;
+  if(b&&!['select-node','select-source'].includes(a))b.disabled=true;
   try {
     if(polling)await polling;
-    const result=await nativeCall(a,args,testing?delayProgress:a==='import-file'?()=>{importReading=true;paint();}:undefined);
-    if(importing&&result?.traffic)toast('订阅已导入');
+    const result=await nativeCall(a,args);
     if(a==='refresh'&&result?.traffic&&!snapshot.online)toast('订阅已更新');
     if(a==='refresh-interval'&&result?.traffic)toast('已保存自动更新间隔');
-    if(testing){
-      const count=latencyRun.ids?.size||0,total=snapshot.nodes.length;
-      if(count>0)toast(count<total?`本轮完成 ${count} / ${total} 个节点测速`:`已完成 ${count} 个节点测速`);
-      latencyRun=null;
-    }
-    if(result?.traffic){const changed=result.node!==snapshot?.node||result.online!==snapshot?.online||result.source!==snapshot?.source;takeSnapshot(result);if(changed){reach.clear();ip=null;}if(visual||(a==='select-source'&&(route==='nodes'||diagnosticRoute())))render();else{paint();if(testing&&route==='nodes'&&order==='delay')reorderNodeRows();}}
+    if(result?.traffic){const changed=result.node!==snapshot?.node||result.online!==snapshot?.online||result.source!==snapshot?.source;takeSnapshot(result);if(changed){reach.clear();ip=null;}if(visual||(a==='select-source'&&(route==='nodes'||diagnosticRoute())))render();else paint();}
     return result;
   }catch(e){
     if(sourceOperation)sourceError=e.message;
-    if(testing)latencyError={source:latencyRun?.source??snapshot.source,text:`测速未完成：${e.message}`,detail:e.message};
-    if(!testing||route!=='nodes')toast(e.message);
+    toast(e.message);
     return null;
   }finally{
-    if(testing)latencyRun=null;
     pending--;working='';
-    if(b?.isConnected&&!['power','select-node','select-source','delay'].includes(a))b.disabled=false;
+    if(b?.isConnected&&!['power','select-node','select-source'].includes(a))b.disabled=false;
     paint();
   }
 }
+async function importSubscription(action,args={}){
+  if(importStage||!snapshot)return;
+  importStage=action==='import-file'?'choosing':'reading';
+  sourceError='';paint();
+  try{
+    const result=await nativeCall(action,typeof args==='function'?await args():args,progress=>{
+      importStage=progress.stage==='saving'?'saving':'reading';paint();
+    });
+    if(result===true)toast('订阅已导入');
+    // Normal snapshot polling will see the committed revision. Import replies
+    // do not contain stale proxy/node state that could overwrite another action.
+  }catch(e){sourceError=e.message;toast(e.message);}
+  finally{importStage='';paint();}
+}
+const isFileDrag=e=>e.dataTransfer?.types.includes('Files');
+const acceptsDrop=()=>route==='sources'&&snapshot&&!importStage&&!$('dialog[open]');
+document.addEventListener('dragover',e=>{
+  if(!isFileDrag(e))return;
+  e.preventDefault();
+  const allowed=!!acceptsDrop();
+  page.classList.toggle('source-drop-active',allowed);
+  e.dataTransfer.dropEffect=allowed?'copy':'none';
+});
+document.addEventListener('dragleave',e=>{
+  if(!e.relatedTarget)page.classList.remove('source-drop-active');
+});
+document.addEventListener('drop',e=>{
+  if(!isFileDrag(e))return;
+  e.preventDefault();
+  page.classList.remove('source-drop-active');
+  if(!acceptsDrop())return;
+  const files=[...e.dataTransfer.files];
+  if(files.length!==1){toast('请一次拖入一个订阅文件。');return;}
+  const file=files[0];
+  if(!/\.(ya?ml|json|txt)$/i.test(file.name)){toast('请拖入 YAML、JSON 或 TXT 订阅文件。');return;}
+  if(file.size>1600000){toast('订阅文件过大。');return;}
+  void importSubscription('import-drop',async()=>{
+    let input;
+    try{
+      const bytes=new Uint8Array(await file.arrayBuffer());
+      const charset=bytes[0]===0xff&&bytes[1]===0xfe?'utf-16le':bytes[0]===0xfe&&bytes[1]===0xff?'utf-16be':'utf-8';
+      input=new TextDecoder(charset,{fatal:true}).decode(bytes);
+    }catch{throw new Error('无法读取订阅文件，请检查编码或重新选择文件。');}
+    const name=[...file.name.replace(/\.[^.]+$/,'').replace(/[\u0000-\u001f\u007f]/g,'')].slice(0,32).join('');
+    return {input,name};
+  });
+});
 applyLanguage();render();
 domainDialog.addEventListener('cancel',e=>{if(domainSaving)e.preventDefault();});
 domainDialog.addEventListener('close',()=>{if(update.promptAfterEditor)showUpdate();});
@@ -605,7 +665,7 @@ document.addEventListener('click', async e=>{
   }
   if(a==='mode'){mode=b.dataset.mode;paint();return;}
   if(a==='cancel'){$('#editor').close();return;}
-  if(a==='import')return edit('导入订阅','订阅地址或节点链接','',v=>mutate('import',{input:v}));
+  if(a==='import')return edit('导入订阅','订阅地址或节点链接','',v=>importSubscription('import',{input:v}));
   if(a==='rename')return edit('编辑订阅','订阅名称',snapshot.sources.find(x=>x.id===id)?.name||'',v=>mutate('rename',{id,name:v}));
   if(a==='replace-url')return edit('替换订阅链接','新 HTTPS 链接（旧链接不显示）','',v=>mutate(a,{id,url:v}));
   if(a==='remove'){if(confirm(tr('移除此订阅及其节点？')))await mutate(a,{id});return;}
@@ -615,7 +675,7 @@ document.addEventListener('click', async e=>{
   if(a==='select-source'){if(id!==snapshot?.source)return mutate(a,{id},false);return;}
   if(a==='refresh')return mutate(a,{id});
   if(a==='refresh-interval')return edit('自动更新间隔','间隔（小时，1–720；填 0 关闭）',String(snapshot.sources.find(s=>s.id===id)?.refreshHours||0),value=>mutate(a,{id,value}));
-  if(a==='delay')return mutate(a,{},false);
+  if(a==='delay')return measureLatency();
   if(a==='connection-close')return mutate(a,{id},false);
   if(a==='domain-rules'){paintDomainRules();domainForm();domainDialog.showModal();return;}
   if(a==='domain-close'){domainDialog.close();return;}
@@ -633,7 +693,7 @@ document.addEventListener('click', async e=>{
   if(a==='reach'){const list=targets().map(x=>x[1]);const res=await mutate('check',{urls:list},false);if(res){reach=new Map(list.map((u,i)=>[u,res[i]]));if(route==='reach')render();}return;}
   if(a==='ip'){const res=await mutate('ip',{},false);if(res){ip=res;if(route==='ip')render();}return;}
   if(a==='autostart')return mutate(a,{value:snapshot?.autoStart?'off':'on'});
-  if(a==='import-file')return mutate(a);
+  if(a==='import-file')return importSubscription(a);
   if(a==='logs-close'){logsDialog.close();return;}
   if(a==='disclaimer-open'){disclaimerDialog.showModal();return;}
   if(a==='disclaimer-close'){disclaimerDialog.close();return;}
@@ -699,7 +759,10 @@ async function poll(){
   if(!pending){polling=nativeCall('snapshot').then(s=>{
     const previous=snapshot;takeSnapshot(s);document.body.dataset.ready='yes';
     if(previous&&(previous.online!==s.online||previous.node!==s.node||previous.engine!==s.engine)){reach.clear();ip=null;if(['reach','ip'].includes(route))render();}
-    if(!previous||(route==='settings'&&previous.online!==s.online)||(route==='sources'&&previous.subscriptionRevision!==s.subscriptionRevision)||(route==='nodes'&&previous.nodeRevision!==s.nodeRevision)){menuClose();render();}else paint();
+    if(!previous||(route==='settings'&&previous.online!==s.online)||(route==='sources'&&previous.subscriptionRevision!==s.subscriptionRevision)||(route==='nodes'&&(previous.source!==s.source||previous.nodeRevision!==s.nodeRevision))){menuClose();render();}else{
+      paint();
+      if(route==='nodes'&&order==='delay'&&!currentLatency(latencyRun)&&previous.delayRevision!==s.delayRevision)reorderNodeRows();
+    }
     if(!update.started){update.started=true;void checkUpdate(true);}
   }).catch(e=>{if(!snapshot)toast(e.message);});await polling;polling=null;}
   setTimeout(poll,1000);

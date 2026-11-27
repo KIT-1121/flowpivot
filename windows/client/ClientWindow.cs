@@ -15,18 +15,24 @@ internal sealed partial class ClientWindow : Form {
     private readonly string root,report;
     private readonly WebView2 view=new WebView2();
     private ClientService service;
-    private bool busy,closing,checkingUpdate,closeToTray=true,exitRequested;
+    private bool busy,importing,measuring,closing,checkingUpdate,closeToTray=true,exitRequested;
     private NotifyIcon tray;
     private ContextMenuStrip trayMenu;
+    private Icon connectedTrayIcon;
+    private bool trayConnected;
     private AppUpdate.Candidate offeredUpdate;
     private readonly System.Windows.Forms.Timer subscriptionTimer=new System.Windows.Forms.Timer{Interval=5000};
+    private EventWaitHandle upgradeExit;
+    private System.Windows.Forms.Timer upgradeTimer;
     private Task<Action> subscriptionDownload;
+    private TaskCompletionSource<bool> importTestGate;
+    private TaskCompletionSource<bool> importTestStarted;
     private int exitCode;
 
     [STAThread] private static int Main(string[] args) {
         bool test=args.Length==2&&args[0]=="--self-test";
         if(args.Length!=0&&!test)return 2;
-        using(var mutex=new Mutex(false,test?@"Local\FlowPivot.Windows.UI.SelfTest":@"Local\FlowPivot.Windows.Client")) {
+        using(var mutex=new Mutex(false,test?@"Local\FlowPivot.Windows.UI.SelfTest":UpgradeSignals.ClientMutex)) {
             bool acquired;
             try{acquired=mutex.WaitOne(0);}catch(AbandonedMutexException){acquired=true;}
             if(!acquired){if(!test)MessageBox.Show("流枢已打开。","FlowPivot");return 3;}
@@ -43,9 +49,14 @@ internal sealed partial class ClientWindow : Form {
         Icon=Icon.ExtractAssociatedIcon(Application.ExecutablePath);
         view.Dock=DockStyle.Fill;Controls.Add(view);
         AddCaption();
-        Shown+=async (o,e)=>await Boot();
+        if(test==null){
+            upgradeExit=new EventWaitHandle(false,EventResetMode.AutoReset,UpgradeSignals.ExitEvent);
+            upgradeTimer=new System.Windows.Forms.Timer{Interval=200};
+            upgradeTimer.Tick+=(o,e)=>{if(upgradeExit.WaitOne(0)){upgradeTimer.Stop();ExitApplication();}};
+        }
+        Shown+=async (o,e)=>{if(upgradeTimer!=null)upgradeTimer.Start();await Boot();};
         FormClosing+=OnClosing;
-        FormClosed+=(o,e)=>subscriptionTimer.Dispose();
+        FormClosed+=(o,e)=>{subscriptionTimer.Dispose();if(upgradeTimer!=null){upgradeTimer.Dispose();upgradeExit.Dispose();}};
         subscriptionTimer.Tick+=RefreshSubscriptions;
     }
     private static bool Local(string raw) {
@@ -57,7 +68,9 @@ internal sealed partial class ClientWindow : Form {
             if(!await OpenSubscriptionLibrary()){busy=false;ExitApplication();return;}
             closeToTray=service.CloseToTray;
             var env=await CoreWebView2Environment.CreateAsync(null,Path.Combine(root,"WebView2"));
+            view.AllowExternalDrop=true;
             await view.EnsureCoreWebView2Async(env);var core=view.CoreWebView2;
+            if(closing||exitRequested){busy=false;ExitApplication();return;}
             core.Settings.AreHostObjectsAllowed=false;core.Settings.AreDevToolsEnabled=false;
             core.Settings.AreDefaultContextMenusEnabled=false;core.Settings.IsWebMessageEnabled=true;core.Settings.IsStatusBarEnabled=false;
             core.NewWindowRequested+=(o,e)=>e.Handled=true;
@@ -101,7 +114,9 @@ internal sealed partial class ClientWindow : Form {
                         await TestCaption(core);
                         await TestLogs(core);
                         await TestCloseBehavior(core);
-                        File.WriteAllText(report,"PASS: production WebView2, native bridge, paper default, caption themes, minimize/restore without retained focus, frameless focused/default close button, Chinese and English captions and disclaimers, log viewer, settings, diagnostics and tray restore.");
+                        await TestBackgroundImport(core);
+                        await TestTrayIndicator(core);
+                        File.WriteAllText(report,"PASS: production WebView2, native bridge, background import with other operations, YAML drop, tray icon reflects real connection status, paper default, caption themes, minimize/restore without retained focus, frameless focused/default close button, Chinese and English captions and disclaimers, log viewer, settings, diagnostics and tray restore.");
                         Close(); // Hide once more, then invoke the tray's real exit command.
                         trayMenu.Items[1].PerformClick();return;
                     }
@@ -120,7 +135,7 @@ internal sealed partial class ClientWindow : Form {
         while(!closing&&!exitRequested){
             string problem;
             try{
-                service=await Task.Run(()=>new ClientService(root,report==null,resetStore:reset));
+                service=await Task.Run(()=>new ClientService(root,report==null,downloader:report==null?null:(Func<string,System.Net.IWebProxy,string,SubscriptionResult>)TestImportDownload,resetStore:reset));
                 return !closing&&!exitRequested;
             }catch(SubscriptionStoreException e){
                 if(report!=null)throw;
@@ -139,6 +154,39 @@ internal sealed partial class ClientWindow : Form {
                 reset=false;
         }
         return false;
+    }
+    private SubscriptionResult TestImportDownload(string url,System.Net.IWebProxy proxy,string patch){
+        if(importTestGate==null||url!="https://flowpivot-test.invalid/slow")
+            throw new InvalidOperationException("Unexpected self-test download.");
+        importTestStarted.TrySetResult(true);
+        if(!importTestGate.Task.Wait(10000))throw new InvalidOperationException("Import fixture timed out.");
+        const string yaml="proxies:\n  - {name: Fixture, type: http, server: 127.0.0.1, port: 18080}";
+        return new SubscriptionResult{Body=yaml,Data=Subscription.Parse(yaml)};
+    }
+    private async Task TestBackgroundImport(CoreWebView2 core){
+        importTestGate=new TaskCompletionSource<bool>();
+        importTestStarted=new TaskCompletionSource<bool>();
+        try{
+            await core.ExecuteScriptAsync("window.importResult=null;void nativeCall('import',{input:'https://flowpivot-test.invalid/slow'}).then(v=>window.importResult=v,()=>window.importResult=false);");
+            if(await Task.WhenAny(importTestStarted.Task,Task.Delay(3000))!=importTestStarted.Task)
+                throw new InvalidOperationException("Background import did not reach the fake downloader.");
+            await core.ExecuteScriptAsync("void mutate('preferred',{value:'V2Fly'},false).then(v=>window.testPreference=v?.preferred);");
+            for(int i=0;i<30&&await core.ExecuteScriptAsync("window.testPreference==='V2Fly'")!="true";i++)await Task.Delay(100);
+            if(await core.ExecuteScriptAsync("window.testPreference==='V2Fly' && window.importResult===null")!="true")
+                throw new InvalidOperationException("Background download blocked a command or completed prematurely.");
+        }finally{importTestGate.TrySetResult(true);}
+        for(int i=0;i<35&&await core.ExecuteScriptAsync("window.importResult===true")!="true";i++)await Task.Delay(100);
+        if(await core.ExecuteScriptAsync("window.importResult===true")!="true")
+            throw new InvalidOperationException("Background import did not commit.");
+        await core.ExecuteScriptAsync(@"document.querySelector('[data-route=sources]').click();
+            const dropped=new DataTransfer();
+            dropped.items.add(new File(['proxies:\n  - {name: Drop, type: http, server: 127.0.0.1, port: 18081}'],'Dropped.yaml'));
+            document.querySelector('#page').dispatchEvent(new DragEvent('drop',{dataTransfer:dropped,bubbles:true,cancelable:true}));");
+        for(int i=0;i<50;i++){
+            if(await core.ExecuteScriptAsync("[...document.querySelectorAll('.source-select')].some(b=>b.textContent==='Dropped')")=="true")return;
+            await Task.Delay(100);
+        }
+        throw new InvalidOperationException("Dropped YAML did not reach the real subscription library.");
     }
     private DialogResult ChooseLibraryRecovery(string problem){
         using(var dialog=new Form{Text="订阅库恢复",StartPosition=FormStartPosition.CenterParent,FormBorderStyle=FormBorderStyle.FixedDialog,
@@ -189,7 +237,7 @@ internal sealed partial class ClientWindow : Form {
         Show();
         if(WindowState==FormWindowState.Minimized)WindowState=FormWindowState.Normal;
         Activate();
-        if(tray!=null)tray.Visible=false;
+        if(tray!=null)tray.Visible=trayConnected;
     }
     private void ExitApplication(){exitRequested=true;Close();}
     private async void RefreshSubscriptions(object sender,EventArgs args){
@@ -202,10 +250,11 @@ internal sealed partial class ClientWindow : Form {
             await Task.Run(apply);
         }finally{
             subscriptionDownload=null;busy=false;
+            SyncTrayConnection();
             if(closing)BeginInvoke((Action)Close);
         }
     }
-    private void HideToTray(){
+    private void EnsureTray(){
         if(tray==null){
             trayMenu=new ContextMenuStrip();
             trayMenu.Items.Add(englishCaption?"Open FlowPivot":"打开流枢",null,(o,e)=>RestoreWindow());
@@ -213,7 +262,21 @@ internal sealed partial class ClientWindow : Form {
             tray=new NotifyIcon{Icon=Icon,Text=CaptionName,ContextMenuStrip=trayMenu};
             tray.MouseDoubleClick+=(o,e)=>{if(e.Button==MouseButtons.Left)RestoreWindow();};
         }
-        tray.Visible=true;Hide();
+    }
+    private string TrayCaption { get {return !trayConnected?CaptionName:englishCaption?"FlowPivot · Connected":"流枢 · 已连接";} }
+    private void SyncTrayConnection(){
+        bool connected=service!=null&&service.IsConnected;
+        if(connected==trayConnected)return;
+        trayConnected=connected;
+        if(connected)EnsureTray();
+        if(tray==null)return;
+        if(connected&&connectedTrayIcon==null)connectedTrayIcon=CreateConnectedTrayIcon();
+        tray.Icon=connected?connectedTrayIcon:Icon;
+        tray.Text=TrayCaption;
+        tray.Visible=connected||!Visible;
+    }
+    private void HideToTray(){
+        EnsureTray();tray.Visible=true;Hide();
     }
     private void OnClosing(object sender,FormClosingEventArgs args){
         if(args.CloseReason==CloseReason.UserClosing&&closeToTray&&!exitRequested&&!closing){
@@ -222,6 +285,7 @@ internal sealed partial class ClientWindow : Form {
         if(busy){args.Cancel=true;closing=true;return;}
         subscriptionTimer.Stop();
         if(tray!=null){tray.Visible=false;tray.Dispose();trayMenu.Dispose();tray=null;trayMenu=null;}
+        if(connectedTrayIcon!=null){connectedTrayIcon.Dispose();connectedTrayIcon=null;}
         if(service!=null)try{service.Dispose();}catch(Exception){if(report==null)MessageBox.Show(this,"未能恢复系统代理。请检查 Windows 的代理设置。",Text);}
     }
     private async void OnMessage(object sender,CoreWebView2WebMessageReceivedEventArgs e){
@@ -256,6 +320,10 @@ internal sealed partial class ClientWindow : Form {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(installed?offeredUpdate.Setup:offeredUpdate.Portable){UseShellExecute=true});
                 Reply(id,true,null);return;
             }
+            if(action=="import"||action=="import-file"||action=="import-drop"){
+                await ImportInBackground(id,action,args);return;
+            }
+            if(action=="delay"){await DelayInBackground(id);return;}
             if(busy){Reply(id,false,"请等待当前操作完成。");return;}
             if(action=="copy-proxy"){
                 var address=service.LocalProxyAddress();
@@ -295,26 +363,64 @@ internal sealed partial class ClientWindow : Form {
                         Reply(id,true,true);return;
                     }
                 }
-                if(action=="import-file") {
-                    using(var dialog=new OpenFileDialog{Title=englishCaption?"Import subscription file":"导入订阅文件",Filter=englishCaption?"Subscription files|*.yaml;*.yml;*.json;*.txt|All files|*.*":"订阅文件|*.yaml;*.yml;*.json;*.txt|所有文件|*.*",CheckFileExists=true}){
-                        if(dialog.ShowDialog(this)!=DialogResult.OK){Reply(id,true,null);return;}
-                        Post(new{id,progress=new{stage="reading"}});
-                        string file=dialog.FileName;
-                        try{args=await Task.Run<IDictionary<string,object>>(()=>ReadFile(file));}
-                        catch(Exception ex){service.RecordFileImportError(ex);throw;}
-                        action="import";
-                    }
-                }
                 if(action=="start"&&LocalData.Text(args,"mode")=="tun"&&MessageBox.Show(this,"实验性 TUN 将改变 Windows 路由与 DNS，可能短时间中断网络。确定继续？",Text,MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes){Reply(id,true,null);return;}
-                Action<object> progress=null;
-                if(action=="delay")progress=body=>BeginInvoke((Action)(()=>Post(new{id,progress=body})));
-                var result=await Task.Run(()=>service.Run(action,args,progress));
+                var result=await Task.Run(()=>service.Run(action,args));
                 if(action=="close-behavior")closeToTray=service.CloseToTray;
                 Reply(id,true,result);
-            }finally{busy=false;if(closing)BeginInvoke((Action)Close);}
+            }finally{busy=false;SyncTrayConnection();if(closing)BeginInvoke((Action)Close);}
         }catch(Exception error){
             if(id>0)Reply(id,false,error is InvalidOperationException?error.Message:"操作未完成。请检查核心、网络或本地文件权限。");
         }
+    }
+    private bool CanFinishBackgroundTask {get{return !closing&&!exitRequested&&!IsDisposed;}}
+    private async Task DelayInBackground(int id){
+        if(measuring)throw new InvalidOperationException("已有测速正在运行。");
+        measuring=true;
+        try{
+            while(busy&&CanFinishBackgroundTask)await Task.Delay(50);
+            if(!CanFinishBackgroundTask)return;
+            var apply=await service.PrepareDelay(body=>{
+                try{BeginInvoke((Action)(()=>{if(CanFinishBackgroundTask)Post(new{id,progress=body});}));}
+                catch(InvalidOperationException){/* The window closed while probing. */}
+            });
+            while(busy&&CanFinishBackgroundTask)await Task.Delay(50);
+            if(!CanFinishBackgroundTask)return;
+            bool applied=apply();
+            if(applied)service.RecordDelayResult();
+            Reply(id,true,applied);
+        }catch(Exception e){
+            if(CanFinishBackgroundTask){service.RecordDelayResult(e);throw;}
+        }finally{measuring=false;}
+    }
+    private async Task ImportInBackground(int id,string action,IDictionary<string,object> args){
+        if(importing)throw new InvalidOperationException("有订阅正在导入，请稍后再试。");
+        importing=true;
+        try{
+            Func<IDictionary<string,object>> read=()=>args;
+            if(action=="import-file"){
+                using(var dialog=new OpenFileDialog{Title=englishCaption?"Import subscription file":"导入订阅文件",Filter=englishCaption?"Subscription files|*.yaml;*.yml;*.json;*.txt|All files|*.*":"订阅文件|*.yaml;*.yml;*.json;*.txt|所有文件|*.*",CheckFileExists=true}){
+                    if(dialog.ShowDialog(this)!=DialogResult.OK){Reply(id,true,null);return;}
+                    string file=dialog.FileName;
+                    read=()=>ReadFile(file);
+                }
+                Post(new{id,progress=new{stage="reading"}});
+            }else if(action=="import-drop"){
+                // Dropped content is always local input, never a URL to download.
+                args["origin"]="file";
+            }
+            while(busy&&CanFinishBackgroundTask)await Task.Delay(50);
+            if(!CanFinishBackgroundTask)return;
+            var apply=await service.PrepareImport(read);
+            if(busy)Post(new{id,progress=new{stage="saving"}});
+            while(busy&&CanFinishBackgroundTask)await Task.Delay(50);
+            if(!CanFinishBackgroundTask)return;
+            // Commit on the serialized UI dispatcher. No other service task is active.
+            apply();
+            service.RecordImportResult();
+            Reply(id,true,true);
+        }catch(Exception e){
+            if(CanFinishBackgroundTask){service.RecordImportResult(e);throw;}
+        }finally{importing=false;}
     }
     private static void CopyText(string text){
         try{Clipboard.SetText(text,TextDataFormat.UnicodeText);}

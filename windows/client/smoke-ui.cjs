@@ -72,10 +72,15 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
         }
         if(action==='delay'){
           window.usedDelay={saved:state.delayUrl,args};
+          const delays=new Map();
           window.measure={
             batch:()=>reply({data:{id,progress:{ids:['a4','a5']}}}),
-            sample:(node,delay)=>{state.nodes.find(n=>n.id===node).delay=delay;reply({data:{id,progress:{id:node,delay}}});},
-            end:()=>reply({data:{id,ok:true,body:structuredClone(state)}}),
+            sample:(node,delay)=>{delays.set(node,delay);reply({data:{id,progress:{id:node,delay}}});},
+            end:()=>{
+              for(const node of state.nodes)if(delays.has(node.id))node.delay=delays.get(node.id);
+              state.delayRevision=(state.delayRevision||0)+1;
+              reply({data:{id,ok:true,body:true}});
+            },
             fail:()=>reply({data:{id,ok:false,body:'测试错误'}}),
           };
           return;
@@ -100,13 +105,15 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
         };
         if(action==='rename')state.sources.find(s=>s.id===args.id).name=args.name;
         window.emptyFixture=()=>{state.sources=[];state.source=state.node=null;state.nodes=[];};
-        if(action==='import'||action==='import-file'){
+        if(action==='import'||action==='import-file'||action==='import-drop'){
+          window.importRequest={action,args};
           window.importFixture={
             reading:()=>reply({data:{id,progress:{stage:'reading'}}}),
             finish:()=>{
-              const source={id:'test'+state.sources.length,name:'导入样本',format:'Mihomo',count:1,refreshable:false};
+              const source={id:'test'+state.sources.length,name:args.name||'导入样本',format:'Mihomo',count:1,refreshable:action==='import'};
               if(!state.sources.length){state.source=source.id;state.node='one';state.nodes=[{id:'one',name:'测试节点',engine:'Mihomo',kind:'http',ready:true}];}
-              state.sources.push(source);reply({data:{id,ok:true,body:structuredClone(state)}});
+              state.sources.push(source);state.subscriptionRevision=(state.subscriptionRevision||0)+1;
+              reply({data:{id,ok:true,body:true}});
             },
             fail:()=>reply({data:{id,ok:false,body:'服务端：HTTP 403，访问被拒绝，请在服务商后台检查权限或更新订阅链接。'}}),
             cancel:()=>reply({data:{id,ok:true,body:null}}),
@@ -374,7 +381,12 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     assert.equal(await page.locator('#latency-progress').evaluate(p=>p.value),1);
     assert.equal(await page.locator('[data-id=a4] .latency-value').textContent(),'19 ms');
     assert.equal(await page.locator('#node-list button').first().getAttribute('data-id'),'a5');
-    await go('sources');await go('nodes');
+    await go('home');
+    await page.locator('#power').click();await page.locator('#session[data-status=online]').waitFor();
+    await page.locator('#power').click();await page.locator('#session[data-status=offline]').waitFor();
+    await go('sources');
+    assert.equal(await page.locator('.source-drop-hint').count(),0);
+    await go('nodes');
     await page.getByText('已测 1 / 2',{exact:true}).waitFor();
     await page.evaluate(()=>{window.measure.sample('a5','failed');window.measure.end();window.measure=null;});
     const doneToast=page.locator('#toast.show').getByText('已完成 2 个节点测速',{exact:true});
@@ -383,6 +395,7 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     assert.equal(await page.locator('#latency-progress').isHidden(),true);
     assert.equal(await page.locator('#node-list button').first().getAttribute('data-id'),'a4');
     assert.equal(await page.locator('[data-id=a5] .latency-value').textContent(),'失败');
+    await go('home');await page.locator('#session[data-status=offline]').waitFor();await go('nodes');
     await doneToast.waitFor({state:'hidden',timeout:5000});
     assert.equal(await page.locator('#latency-notice').isHidden(),true);
     await startDelay();
@@ -715,15 +728,61 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await disconnectNotice.waitFor({state:'visible'});
     await page.locator('#session-title').filter({hasText:'未连接'}).waitFor();
     await disconnectNotice.waitFor({state:'hidden',timeout:4200});
+    const beginSlowImport=async()=>{
+      await go('sources');
+      await page.evaluate(()=>{window.importFixture=null;});
+      await page.locator('[data-act=import]').click();
+      await page.locator('#editor input').fill('https://example.invalid/sample');
+      await page.locator('#editor button[type=submit]').click();
+      await page.waitForFunction(()=>!!window.importFixture);
+      await page.locator('.import-status').filter({hasText:'正在读取并识别订阅'}).waitFor();
+    };
+    await beginSlowImport();
+    assert.equal(await page.locator('[data-act=import-file]').isDisabled(),true);
+    await go('home');
+    assert.equal(await power.isEnabled(),true);
+    await power.click();await page.locator('#session[data-status=online]').waitFor();
+    await power.click();await page.locator('#session[data-status=offline]').waitFor();
+    await go('nodes');
+    const nextNode=page.locator('#node-list button[aria-pressed=false]').first();
+    const chosenId=await nextNode.getAttribute('data-id');
+    await nextNode.click();
+    const chosen=page.locator(`#node-list button[data-id="${chosenId}"][aria-pressed=true]`);
+    await chosen.waitFor();
+    await page.evaluate(()=>{window.measure=null;});
+    await page.getByRole('button',{name:'测延迟',exact:true}).click();
+    await page.getByText('准备测速…',{exact:true}).waitFor();
+    await page.waitForFunction(()=>!!window.measure);
+    await page.evaluate(()=>{window.measure.batch();window.measure.sample('a4',42);window.measure.end();});
+    await page.locator('[data-act=delay]:enabled').waitFor();
+    await go('sources');
+    assert.equal(await page.locator('.import-status').isVisible(),true);
+    await page.evaluate(()=>window.importFixture.finish());
+    await page.locator('[data-source=test2]').waitFor();
+    await go('nodes');
+    await chosen.waitFor();
     await page.evaluate(()=>window.emptyFixture());
     await page.waitForTimeout(1200);
-    await go('sources');
-    await page.locator('[data-act=import]').click();
-    await page.locator('#editor input').fill('https://example.invalid/sample');
-    await page.locator('#editor button[type=submit]').click();
+    await go('sources');await page.evaluate(()=>{window.importFixture=null;window.importRequest=null;});
+    const simulateDrop=(name,body)=>page.evaluate(({name,body})=>{
+      const dt=new DataTransfer();
+      dt.items.add(new File([body],name));
+      const el=document.querySelector('#page');
+      const over=new DragEvent('dragover',{dataTransfer:dt,bubbles:true,cancelable:true});el.dispatchEvent(over);
+      const highlighted=el.classList.contains('source-drop-active');
+      const drop=new DragEvent('drop',{dataTransfer:dt,bubbles:true,cancelable:true});el.dispatchEvent(drop);
+      return {highlighted,prevented:drop.defaultPrevented};
+    },{name,body});
+    const yaml='proxies:\n  - {name: Dropped, type: http, server: example.invalid, port: 8080}';
+    assert.deepEqual(await simulateDrop('invalid.exe',''),{highlighted:true,prevented:true});
+    await page.locator('#toast.show').filter({hasText:'请拖入 YAML、JSON 或 TXT 订阅文件'}).waitFor();
+    assert.equal(await page.evaluate(()=>window.importRequest),null);
+    assert.deepEqual(await simulateDrop('拖入测试.YAML',yaml),{highlighted:true,prevented:true});
+    assert.equal(await page.locator('#page').evaluate(el=>el.classList.contains('source-drop-active')),false);
     await page.locator('.import-status').filter({hasText:'正在读取并识别订阅'}).waitFor();
     assert.equal(await page.locator('[data-act=import-file]').isDisabled(),true);
     await page.waitForFunction(()=>!!window.importFixture);
+    assert.deepEqual(await page.evaluate(()=>window.importRequest),{action:'import-drop',args:{input:yaml,name:'拖入测试'}});
     await page.evaluate(()=>window.importFixture.finish());
     await page.locator('[data-source=test0].source-active').waitFor();
     await page.locator('[data-source=test0] .source-menu-trigger').click();
@@ -788,6 +847,6 @@ const {chromium} = require(process.env.FLOWPIVOT_PLAYWRIGHT || 'playwright');
     await go('sources');
     assert.equal(await page.locator('[data-act=import]').isEnabled(),true);
     assert.deepEqual(errors,[]);
-    console.log('PASS: silent unchanged refresh, manual and automatic disconnect notices and dismissal, paper default and theme persistence, centralized routing rules, bilingual text and existing renderer regressions.');
+    console.log('PASS: start/stop while latency tests run, live progress across pages, no persistent drop hint, YAML drop, background import, and existing renderer regressions.');
   } finally {await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

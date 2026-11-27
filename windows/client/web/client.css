@@ -274,6 +274,7 @@ body:has(dialog[open]) #pointer-glow { opacity:0 }
 }
 .import-status { display:flex; align-items:center; gap:8px; margin:-4px 0 12px; color:var(--accent); font-weight:650 }
 .import-status .latency-spinner { width:15px; height:15px }
+.source-drop-active { outline:2px dashed var(--accent); outline-offset:-3px }
 .import-failure { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; border-color:var(--danger); color:var(--danger); overflow-wrap:anywhere }
 .import-failure p { color:var(--text); margin-top:3px; font-size:13px }
 :root[lang=en] .local-proxy::before { content:"Local" }

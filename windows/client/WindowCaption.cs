@@ -21,7 +21,7 @@ internal sealed partial class ClientWindow {
             UpdateMaximizeLabel();
             caption.Invalidate();
         }
-        if(tray!=null){tray.Text=CaptionName;trayMenu.Items[0].Text=englishCaption?"Open FlowPivot":"打开流枢";trayMenu.Items[1].Text=englishCaption?"Quit":"退出";}
+        if(tray!=null){tray.Text=TrayCaption;trayMenu.Items[0].Text=englishCaption?"Open FlowPivot":"打开流枢";trayMenu.Items[1].Text=englishCaption?"Quit":"退出";}
     }
     private void UpdateMaximizeLabel(){
         bool max=WindowState==FormWindowState.Maximized;
@@ -39,6 +39,28 @@ internal sealed partial class ClientWindow {
     }
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam);
+    [StructLayout(LayoutKind.Sequential)] private struct WindowRect {public int Left,Top,Right,Bottom;}
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd,out WindowRect rect);
+    [DllImport("user32.dll")] private static extern bool IsZoomed(IntPtr hwnd);
+    protected override void WndProc(ref Message m){
+        const int ncCalcSize=0x0083, ncHitTest=0x0084, htClient=1, htTop=12;
+        if(!SystemCaption&&m.Msg==ncCalcSize&&m.LParam!=IntPtr.Zero&&!IsZoomed(m.HWnd)){
+            // Keep the native sides, bottom and system menu. Let the themed
+            // client paint the old top-frame strip, except for the 1px rim.
+            int top=Marshal.ReadInt32(m.LParam,4);
+            base.WndProc(ref m);
+            Marshal.WriteInt32(m.LParam,4,Math.Min(Marshal.ReadInt32(m.LParam,4),top+1));
+            m.Result=IntPtr.Zero;
+            return;
+        }
+        base.WndProc(ref m);
+        if(!SystemCaption&&m.Msg==ncHitTest&&m.Result.ToInt32()==htClient&&!IsZoomed(m.HWnd)){
+            WindowRect r;
+            int y=unchecked((short)(m.LParam.ToInt64()>>16));
+            if(GetWindowRect(m.HWnd,out r)&&y>=r.Top&&y<r.Top+CaptionUnit(5))
+                m.Result=new IntPtr(htTop);
+        }
+    }
     private void ShowWindowMenu(){SendMessage(Handle,0x0112,new IntPtr(0xF100),new IntPtr(32));} // SC_KEYMENU (Alt+Space)
     private void ToggleMaximize(){WindowState=WindowState==FormWindowState.Maximized?FormWindowState.Normal:FormWindowState.Maximized;}
     private int CaptionUnit(int px){return Math.Max(1,(px*DeviceDpi+48)/96);}
@@ -93,7 +115,10 @@ internal sealed partial class ClientWindow {
             bool pressed=hover&&Capture&&(MouseButtons&MouseButtons.Left)!=0;
             var fill=pressed?FlatAppearance.MouseDownBackColor:hover?FlatAppearance.MouseOverBackColor:BackColor;
             e.Graphics.Clear(fill.IsEmpty?BackColor:fill);
-            TextRenderer.DrawText(e.Graphics,Text,Font,ClientRectangle,ForeColor,
+            if(Text=="−"){
+                int width=Math.Max(12,(14*DeviceDpi+48)/96), height=Math.Max(2,(2*DeviceDpi+48)/96);
+                using(var stroke=new SolidBrush(ForeColor))e.Graphics.FillRectangle(stroke,(Width-width)/2,(Height-height)/2,width,height);
+            }else TextRenderer.DrawText(e.Graphics,Text,Font,ClientRectangle,ForeColor,
                 TextFormatFlags.HorizontalCenter|TextFormatFlags.VerticalCenter|TextFormatFlags.NoPrefix|TextFormatFlags.SingleLine);
             if(Focused&&ShowFocusCues){
                 int half=Math.Max(4,Width/10), y=Height*3/4;
@@ -126,7 +151,7 @@ internal sealed partial class ClientWindow {
             caption.BackColor=bg;caption.ForeColor=text;
             foreach(var button in new[]{minimizeCaption,maximizeCaption,closeCaption}){
                 button.BackColor=bg;button.ForeColor=text;
-                button.FlatAppearance.MouseOverBackColor=button==closeCaption?(dark?Color.FromArgb(109,46,54):Color.FromArgb(255,187,191)):hover;
+                button.FlatAppearance.MouseOverBackColor=hover;
                 button.FlatAppearance.MouseDownBackColor=ControlPaint.Dark(button.FlatAppearance.MouseOverBackColor,.12f);
             }
         }
@@ -161,13 +186,29 @@ internal sealed partial class ClientWindow {
             }
         }
         if(caption==null)return; // Use the system controls in high contrast.
+        WindowRect frame;
+        var client=caption.PointToScreen(Point.Empty);
+        if(!GetWindowRect(Handle,out frame)||client.Y-frame.Top<0||client.Y-frame.Top>1)
+            throw new InvalidOperationException("An unthemed native band remains above the caption.");
+        int hitX=client.X+caption.Width/2, hitY=frame.Top+CaptionUnit(2);
+        if(SendMessage(Handle,0x0084,IntPtr.Zero,new IntPtr((hitX&0xffff)|((hitY&0xffff)<<16))).ToInt32()!=12)
+            throw new InvalidOperationException("The top edge no longer supports resizing.");
         foreach(var theme in new[]{"light","dark","mist","paper","ink","glass"}){
             var previous=caption.BackColor;
             await core.ExecuteScriptAsync("(()=>{const s=document.querySelector('#theme');s.value='"+theme+"';s.dispatchEvent(new Event('change',{bubbles:true}));})()");
             for(int i=0;i<30&&captionTheme!=theme;i++)await Task.Delay(100);
             if(captionTheme!=theme||caption.BackColor==previous||view.Top<caption.Bottom)throw new InvalidOperationException("Caption theme or layout did not update.");
+            if(minimizeCaption.FlatAppearance.MouseOverBackColor!=closeCaption.FlatAppearance.MouseOverBackColor||
+                maximizeCaption.FlatAppearance.MouseDownBackColor!=closeCaption.FlatAppearance.MouseDownBackColor)
+                throw new InvalidOperationException("Caption interaction colors do not match.");
             if(theme=="light"&&await core.ExecuteScriptAsync("getComputedStyle(document.querySelector('.side')).backgroundColor")!="\"rgb(234, 240, 240)\"")
                 throw new InvalidOperationException("Light theme sidebar did not become light.");
+        }
+        using(var glyph=new Bitmap(minimizeCaption.Width,minimizeCaption.Height)){
+            minimizeCaption.DrawToBitmap(glyph,new Rectangle(Point.Empty,minimizeCaption.ClientSize));
+            int y=glyph.Height/2, pixels=0;
+            for(int x=0;x<glyph.Width;x++)if(glyph.GetPixel(x,y).ToArgb()==minimizeCaption.ForeColor.ToArgb())pixels++;
+            if(pixels<CaptionUnit(12))throw new InvalidOperationException("Minimize glyph is too small.");
         }
         using(var snapshot=new Bitmap(caption.Width,caption.Height)){
             caption.DrawToBitmap(snapshot,new Rectangle(Point.Empty,caption.ClientSize));
@@ -175,6 +216,8 @@ internal sealed partial class ClientWindow {
         }
         maximizeCaption.PerformClick();
         if(WindowState!=FormWindowState.Maximized)throw new InvalidOperationException("Caption did not maximize.");
+        if(caption.PointToScreen(Point.Empty).Y<Screen.FromHandle(Handle).WorkingArea.Top-1)
+            throw new InvalidOperationException("Maximized caption overlaps the monitor work area.");
         maximizeCaption.PerformClick();
         if(WindowState!=FormWindowState.Normal)throw new InvalidOperationException("Caption did not restore.");
         Activate();

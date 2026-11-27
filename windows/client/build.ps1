@@ -25,7 +25,7 @@ $fileVersion=$versionMatch.Groups[1].Value+".$buildNumber"
 $prefix="FlowPivot-$version-windows-x64"
 $setup=Join-Path $Output ($prefix+'-setup.exe')
 $zip=Join-Path $Output ($prefix+'-portable.zip')
-foreach($p in @($Stage,($Stage+'.core-stage.exe'),$setup,$zip)){if(Test-Path -LiteralPath $p){throw "Refusing to overwrite $p"}}
+foreach($p in @($Stage,($Stage+'.core-stage.exe'),($Stage+'.upgrade'),$setup,$zip)){if(Test-Path -LiteralPath $p){throw "Refusing to overwrite $p"}}
 $Stage=(New-Item -ItemType Directory -Path $Stage).FullName
 $web=(New-Item -ItemType Directory -Path (Join-Path $Stage 'web')).FullName
 foreach($name in @('index.html','client.js','client.css','strings.js')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot "web\$name") -Destination $web}
@@ -36,7 +36,7 @@ foreach($name in @('LICENSE.txt','NOTICE.txt')){Copy-Item -LiteralPath (Join-Pat
 Copy-Item -LiteralPath (Join-Path $YamlSdk 'lib\net47\YamlDotNet.dll') -Destination $Stage
 Copy-Item -LiteralPath $YamlLicense -Destination (Join-Path $Stage 'YamlDotNet-LICENSE.txt')
 foreach($name in @('README.md','THIRD-PARTY-CORES.md')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $Stage}
-$files=(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | Where-Object Name -NotIn @('LoopbackTest.cs','BundledCoreStager.cs')).FullName
+$files=(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.cs' | Where-Object Name -NotIn @('LoopbackTest.cs','BundledCoreStager.cs','UpgradeHelper.cs')).FullName
 $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $appIcon=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'assets\FlowPivot.ico')).Path
 Copy-Item -LiteralPath $appIcon -Destination (Join-Path $Stage "FlowPivot-$version.ico")
@@ -52,7 +52,17 @@ try {
 }
 & $csc /nologo /codepage:65001 /target:winexe /platform:x64 /optimize+ /warnaserror+ "/out:$Stage\FlowPivot.exe" "/win32icon:$appIcon" @references $files
 if($LASTEXITCODE -ne 0){throw 'Client compilation failed'}
-& $Iscc "/DPayload=$Stage" "/DOutput=$Output" "/DVersion=$version" "/DFileVersion=$fileVersion" "/DAppIcon=$appIcon" (Join-Path $PSScriptRoot 'client.iss')
-if($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $setup)){throw 'Installer build failed'}
+$helperDir=(New-Item -ItemType Directory -Path ($Stage+'.upgrade')).FullName
+$helper=Join-Path $helperDir 'FlowPivotUpgrade.exe'
+try {
+    $helperSource=@('UpgradeHelper.cs','UpgradeSignals.cs','WindowsProxy.cs','LocalData.cs') | ForEach-Object {Join-Path $PSScriptRoot $_}
+    & $csc /nologo /codepage:65001 /target:exe /platform:x64 /optimize+ /warnaserror+ "/out:$helper" /reference:System.Web.Extensions.dll /reference:System.Security.dll $helperSource
+    if($LASTEXITCODE -ne 0){throw 'Upgrade helper compilation failed'}
+    & $Iscc "/DPayload=$Stage" "/DOutput=$Output" "/DVersion=$version" "/DFileVersion=$fileVersion" "/DAppIcon=$appIcon" "/DUpgradeHelper=$helper" (Join-Path $PSScriptRoot 'client.iss')
+    if($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $setup)){throw 'Installer build failed'}
+} finally {
+    if(Test-Path -LiteralPath $helper){Remove-Item -LiteralPath $helper}
+    Remove-Item -LiteralPath $helperDir
+}
 Compress-Archive -Path (Join-Path $Stage '*') -DestinationPath $zip
 Get-FileHash -LiteralPath @($setup,$zip)

@@ -507,6 +507,27 @@ internal static class LoopbackTest {
         Assert(delay>0,"core delay");
         Assert(packets.Length==3&&(packets[0]["ids"] as object[]).SequenceEqual(new[]{"FP-001","FP-002"})&&packets.Skip(1).Any(p=>LocalData.Text(p,"id")=="FP-001"&&LocalData.Number(p,"delay")==delay),"real batch and per-node progress before final snapshot");
         s=Call(service,"snapshot",Args());Assert(LocalData.Number(LocalData.Obj(s,"traffic"),"down")>0,"controller traffic counters");
+        using(var entered=new ManualResetEventSlim(false))
+        using(var releaseDelay=new ManualResetEventSlim(false)){
+          var independent=service.PrepareDelay(msg=>{if(LocalData.Parse(LocalData.Json.Serialize(msg)).ContainsKey("ids")){entered.Set();releaseDelay.Wait(10000);}});
+          try{
+            Assert(entered.Wait(3500),"background latency batch enters while live proxy runs");
+            Assert(!Convert.ToBoolean(Call(service,"stop",Args())["online"])&&!independent.IsCompleted,"proxy stops without waiting for latency batch");
+            Assert(Convert.ToBoolean(Call(service,"start",Args("mode","local"))["online"])&&!independent.IsCompleted,"proxy restarts without waiting for the separate probe");
+          }finally{releaseDelay.Set();}
+          Assert(independent.GetAwaiter().GetResult()()&&LocalData.Number(LocalData.Rows(Call(service,"snapshot",Args()),"nodes").First(),"delay")>0,
+            "independent probe completes and publishes results after live stop/start");
+        }
+        using(var entered=new ManualResetEventSlim(false))
+        using(var releaseDelay=new ManualResetEventSlim(false)){
+          var stale=service.PrepareDelay(msg=>{if(LocalData.Parse(LocalData.Json.Serialize(msg)).ContainsKey("ids")){entered.Set();releaseDelay.Wait(10000);}});
+          try{
+            Assert(entered.Wait(3500),"prepare a latency batch before changing its target");
+            Call(service,"delay-url",Args("value","http://example.invalid/changed-latency"));
+          }finally{releaseDelay.Set();}
+          Assert(!stale.GetAwaiter().GetResult()(),"discard background results when measurement settings change");
+          Call(service,"delay-url",Args("value",address));
+        }
         using(var direct=Hold((int)LocalData.Number(s,"port"),"127.0.0.1:"+port))
         using(var routed=Hold((int)LocalData.Number(s,"port"),"example.invalid")){
           var connections=LocalData.Obj(Call(service,"snapshot",Args()),"connections");

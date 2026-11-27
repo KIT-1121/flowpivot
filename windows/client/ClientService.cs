@@ -41,6 +41,7 @@ internal sealed class ClientService : IDisposable
     private ProxyNode runningNode;
     private int subscriptionRevision;
     private int subscriptionDisconnectRevision;
+    private int delayRevision;
     private readonly Func<DateTime> utcNow;
     private readonly Func<string,IWebProxy,string,SubscriptionResult> download;
     private bool ownsSystem;
@@ -79,6 +80,7 @@ internal sealed class ClientService : IDisposable
         }
     }
     internal bool CloseToTray { get {return model.CloseToTray;} }
+    internal bool IsConnected { get {return session!=null&&session.Alive;} }
     internal string LocalProxyAddress(){
         if(session==null||!session.Alive)throw new InvalidOperationException("请先启动代理。");
         return "127.0.0.1:"+session.Port;
@@ -170,7 +172,7 @@ internal sealed class ClientService : IDisposable
             case "autostart": Startup(LocalData.Text(args,"value")=="on");break;
             case "start": Start(LocalData.Text(args,"mode"));break;
             case "stop": Stop();break;
-            case "delay": return Measure(model.DelayUrl??DefaultDelayUrl,progress);
+            case "delay": PrepareDelay(progress).GetAwaiter().GetResult()();return Snapshot();
             case "check": return Check(args);
             case "ip": return Ip();
             default:throw new InvalidOperationException("不支持此操作。");
@@ -190,18 +192,30 @@ internal sealed class ClientService : IDisposable
         model.Source=source.Id;model.Node=source.LastNode=RememberedNode(source,parsed[source.Id]);
         try{Save();}catch{model.Source=previousSource;model.Node=previousNode;source.LastNode=remembered;throw;}
     }
-    private void Import(IDictionary<string,object> args) {
+    internal Task<Action> PrepareImport(Func<IDictionary<string,object>> read){
         if(model.Sources.Count>=20)throw new InvalidOperationException("最多保存 20 个订阅。");
+        var proxy=SessionOrSystemProxy();
+        return Task.Run(()=>BuildImport(read(),proxy));
+    }
+    private Action BuildImport(IDictionary<string,object> args,IWebProxy proxy) {
         string input=LocalData.Text(args,"input").Trim(), name=LocalData.Text(args,"name").Trim();
         string url=input.StartsWith("https://",StringComparison.OrdinalIgnoreCase)&&!input.Any(char.IsWhiteSpace)&&LocalData.Text(args,"origin")!="file"?input:null;
-        var fetched=url==null?new SubscriptionResult{Body=input,Data=Subscription.Parse(input)}:download(url,SessionOrSystemProxy(),null);
+        var fetched=url==null?new SubscriptionResult{Body=input,Data=Subscription.Parse(input)}:download(url,proxy,null);
+        return ()=>CommitImport(fetched,url,name);
+    }
+    private void Import(IDictionary<string,object> args){BuildImport(args,SessionOrSystemProxy())();}
+    private void CommitImport(SubscriptionResult fetched,string url,string name){
+        // Recheck at commit time: subscription edits can run while preparing the import.
+        if(model.Sources.Count>=20)throw new InvalidOperationException("最多保存 20 个订阅。");
         var data=fetched.Data;
         var source=new SourceRecord{Body=fetched.Body,Url=url,Quota=fetched.Quota,Name=name.Length==0?"订阅 "+(model.Sources.Count+1):Name(name),Id=Guid.NewGuid().ToString("N")};
         var previousSource=model.Source;var previousNode=model.Node;
         if(model.Sources.Count==0){model.Source=source.Id;model.Node=source.LastNode=DefaultNode(data);}
         model.Sources.Add(source);parsed.Add(source.Id,data);
         try {Save();} catch {model.Sources.Remove(source);parsed.Remove(source.Id);model.Source=previousSource;model.Node=previousNode;throw;}
+        subscriptionRevision++;
     }
+    internal void RecordImportResult(Exception failure=null){log.Write(failure==null?"导入订阅完成":"导入订阅失败",failure);}
     private void Update(SourceRecord source,string newUrl) {
         string url=newUrl??source.Url;
         if(string.IsNullOrEmpty(url))throw new InvalidOperationException("请输入新的 HTTPS 订阅链接。");
@@ -466,43 +480,63 @@ internal sealed class ClientService : IDisposable
         IDictionary<string,object> nodeDelays=null;if(model.Source!=null)delays.TryGetValue(model.Source,out nodeDelays);
         return new { appVersion=AppUpdate.Version, online=session!=null, system=ownsSystem, canTun=Elevated(), mode=activeMode, engine=session==null?null:activeEngine, port=session==null?0:session.Port, localProxyPort=model.LocalProxyPort, warning, autoStart=StartupEnabled(), closeToTray=CloseToTray, delayUrl=model.DelayUrl??DefaultDelayUrl, preferred=model.Preferred??"Xray",
             runningNodeName=runningNode==null?null:SelectableName(nodes), subscriptionDisconnectRevision, subscriptionRevision,
-            nodeRevision=nodes==null?0:Source(model.Source).NodeRevision,
+            nodeRevision=nodes==null?0:Source(model.Source).NodeRevision,delayRevision,
             cores=CoreAsset.Catalog.Select(c=>new{id=c.Id,version=CorePath(c.Id).Length>0?c.Version:""}).ToArray(), sources=model.Sources.Select(x=>new{ id=x.Id,name=x.Name,format=parsed[x.Id].Format,count=parsed[x.Id].Nodes.Count,skipped=parsed[x.Id].Skipped,refreshable=!string.IsNullOrEmpty(x.Url),refreshHours=x.RefreshHours,nextRefresh=x.RefreshHours>0?new DateTime(x.NextRefreshUtcTicks,DateTimeKind.Utc).ToString("o",CultureInfo.InvariantCulture):null,autoRefreshFailed=x.AutoRefreshFailed,yaml=parsed[x.Id].Nodes[0].Data!=null,quota=x.Quota==null?null:new{total=x.Quota.Total,used=x.Quota.Used,remaining=x.Quota.Remaining} }).ToArray(),
             source=model.Source,node=model.Node,nodes=nodes==null?null:nodes.Nodes.Select(x=>new{id=x.Id,name=x.Name,kind=x.Kind,engine=Engine(x),ready=CorePath("Mihomo").Length>0&&CorePath(Engine(x)).Length>0,delay=nodeDelays!=null && nodeDelays.ContainsKey(x.Id)?nodeDelays[x.Id]:null}).ToArray(),
             traffic=new{up,down,rateUp,rateDown}, connections=new{direct,routed,total=direct+routed,rows},
             domainRoutes=model.DomainRoutes.Select(r=>new{id=r.Id,kind=r.Kind,pattern=r.Pattern,value=r.Value}).ToArray() };
     }
-    private object Measure(string url,Action<object> progress) {
-        var target=Subscription.HttpUri(url,false);var data=Active();
+    internal Task<Func<bool>> PrepareDelay(Action<object> progress) {
+        var data=Active();var source=Source(model.Source);int revision=source.NodeRevision;
+        string url=model.DelayUrl??DefaultDelayUrl, preferred=model.Preferred;
+        var target=Subscription.HttpUri(url,false);
         bool native=data.Nodes[0].Native!=null;
         var batch=data.Nodes.Take(native?24:80).ToArray();
+        var paths=native?batch.ToDictionary(n=>n.Id,n=>{string engine=Engine(n);return Tuple.Create(engine,CorePath(engine));}):null;
+        string mihomo=CorePath("Mihomo");
+        return Task.Run<Func<bool>>(()=>{
+            var result=MeasureBatch(mihomo,root,data,batch,paths,target,progress);
+            return ()=>{
+                // UI/service dispatcher: reject a replaced/removed subscription,
+                // old positional node IDs, or a different measurement setup.
+                if(!model.Sources.Contains(source)||source.NodeRevision!=revision||url!=(model.DelayUrl??DefaultDelayUrl)||preferred!=model.Preferred)
+                    return false;
+                delays[source.Id]=result;delayRevision++;
+                return true;
+            };
+        });
+    }
+    internal void RecordDelayResult(Exception failure=null){log.Write(failure==null?"节点测速完成":"节点测速失败",failure);}
+    private static IDictionary<string,object> MeasureBatch(string mihomo,string root,ParsedSource data,ProxyNode[] batch,
+        Dictionary<string,Tuple<string,string>> paths,Uri target,Action<object> progress) {
         var result=new System.Collections.Concurrent.ConcurrentDictionary<string,object>();
         if(progress!=null)progress(new {ids=batch.Select(n=>n.Id).ToArray()});
         Action<string,object> finish=(id,delay)=>{
             result[id]=delay;
             if(progress!=null)progress(new {id,delay});
         };
-        if(native){
+        if(paths!=null){
             // Each native node needs an isolated upstream process.
             Parallel.ForEach(batch,new ParallelOptions{MaxDegreeOfParallelism=4},n=>{
-                string engine=Engine(n);object delay="failed";
-                if(CorePath(engine).Length==0||CorePath("Mihomo").Length==0){finish(n.Id,"missing");return;}
-                try{using(var probe=new MihomoSession(CorePath("Mihomo"),root,data,n.Id,engine,CorePath(engine))){var ms=probe.Delay(n.Id,target);if(ms>0)delay=ms;}}
+                var core=paths[n.Id];object delay="failed";
+                if(core.Item2.Length==0||mihomo.Length==0){finish(n.Id,"missing");return;}
+                try{using(var probe=new MihomoSession(mihomo,root,data,n.Id,core.Item1,core.Item2)){var ms=probe.Delay(n.Id,target);if(ms>0)delay=ms;}}
                 catch(Exception e){if(!(e is WebException||e is InvalidOperationException||e is IOException))throw;}
                 finish(n.Id,delay);
             });
         } else {
-            var probe=session!=null&&runningSource==data?session:new MihomoSession(CorePath("Mihomo"),root,data,batch[0].Id);
-            try {
+            // An isolated ephemeral listener never shares the main connection,
+            // its fixed port, system proxy, or TUN.
+            using(var probe=new MihomoSession(mihomo,root,data,batch[0].Id)){
                 Parallel.ForEach(batch,new ParallelOptions{MaxDegreeOfParallelism=6},n=>{
                     object delay="failed";
                     try {var ms=probe.Delay(n.Id,target);if(ms>0)delay=ms;}
                     catch(WebException){}
                     finish(n.Id,delay);
                 });
-            } finally {if(probe!=session)probe.Dispose();}
+            }
         }
-        delays[model.Source]=result;return Snapshot();
+        return result;
     }
     private object Check(IDictionary<string,object> args) {
         var s=session;if(s==null)throw new InvalidOperationException("请先启动代理。");
